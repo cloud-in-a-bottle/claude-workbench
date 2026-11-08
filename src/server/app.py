@@ -40,6 +40,8 @@ from server.routes.projects import create_workspace
 from server.routes.projects import delete_project
 from server.routes.projects import list_projects
 from server.routes.projects import remove_workspace
+from server.routes.projects import reorder_projects_route
+from server.routes.projects import reorder_workspaces_route
 from server.routes.projects import unarchive_workspace_route
 from server.routes.projects import update_project
 from server.routes.settings import get_settings
@@ -100,6 +102,8 @@ app = Litestar(
         create_project,
         update_project,
         delete_project,
+        reorder_projects_route,
+        reorder_workspaces_route,
         create_workspace,
         remove_workspace,
         archive_workspace_route,

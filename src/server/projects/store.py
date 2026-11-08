@@ -23,6 +23,10 @@ class Project:
     # Branch new workspaces start from. Empty means "whatever the repo's own default branch is",
     # resolved from the remote at creation time rather than remembered here.
     default_branch: str = ""
+    # The order the sidebar shows its workspaces in, by name. Only a preference: the workspaces
+    # themselves are still whatever is on disk, so names here may be stale and new workspaces may be
+    # missing from it -- see `order_workspaces`.
+    workspace_order: tuple[str, ...] = ()
 
     @property
     def has_repo(self) -> bool:
@@ -70,6 +74,9 @@ def load_projects() -> tuple[Project, ...]:
         default_branch = str(entry.get("default_branch", ""))
         if default_branch and not REF_RE.match(default_branch):
             raise ValueError(f"malformed default branch {default_branch!r} for {project_id} in {PROJECTS_PATH}")
+        workspace_order = entry.get("workspace_order", [])
+        if not isinstance(workspace_order, list):
+            raise ValueError(f"malformed workspace order for {project_id} in {PROJECTS_PATH}: expected a list")
         projects.append(
             Project(
                 id=project_id,
@@ -77,6 +84,7 @@ def load_projects() -> tuple[Project, ...]:
                 repo_url=str(entry.get("repo_url", "")),
                 setup=str(entry.get("setup", "")),
                 default_branch=default_branch,
+                workspace_order=tuple(str(n) for n in workspace_order),
             )
         )
     return tuple(projects)
@@ -92,6 +100,7 @@ def save_projects(projects: tuple[Project, ...]) -> None:
             "repo_url": p.repo_url,
             "setup": p.setup,
             "default_branch": p.default_branch,
+            "workspace_order": list(p.workspace_order),
         }
         for p in projects
     ]
@@ -126,3 +135,17 @@ def add_project(name: str, repo_url: str, setup: str = "", default_branch: str =
 
 def remove_project(project_id: str) -> None:
     save_projects(tuple(p for p in load_projects() if p.id != project_id))
+
+
+def reorder_projects(ids: list[str]) -> None:
+    """Save the projects in the order given. `ids` must name every project exactly once: an order
+    built from a stale list would otherwise drop or duplicate one, so that raises instead."""
+    projects = load_projects()
+    by_id = {p.id: p for p in projects}
+    if len(ids) != len(projects) or set(ids) != by_id.keys():
+        raise ValueError("the order must list every project exactly once")
+    save_projects(tuple(by_id[i] for i in ids))
+
+
+def set_workspace_order(project_id: str, names: tuple[str, ...]) -> None:
+    save_projects(tuple(attr.evolve(p, workspace_order=names) if p.id == project_id else p for p in load_projects()))

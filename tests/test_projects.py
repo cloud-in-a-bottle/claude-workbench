@@ -725,3 +725,60 @@ def test_attaching_rejects_a_bad_url(workbench_home: Path, monkeypatch: pytest.M
     _stub_access(monkeypatch)
     _folder_with_repo_workspace(workbench_home)
     assert _client().patch("/api/projects/s", json={"repo_url": "not a url"}).status_code == 400
+
+
+# --- sidebar order ---
+
+
+def test_projects_can_be_reordered(workbench_home: Path) -> None:
+    for name in ("a", "b", "c"):
+        store.add_project(name, "")
+    client = _client()
+    assert client.put("/api/projects/order", json={"ids": ["c", "a", "b"]}).status_code == 200
+    assert [p["id"] for p in client.get("/api/projects").json()] == ["c", "a", "b"]
+
+
+@pytest.mark.parametrize("ids", [["a"], ["a", "b", "b"], ["a", "b", "x"], ["a", "a"]])
+def test_a_stale_project_order_is_refused(workbench_home: Path, ids: list[str]) -> None:
+    store.add_project("a", "")
+    store.add_project("b", "")
+    resp = _client().put("/api/projects/order", json={"ids": ids})
+    assert resp.status_code == 409
+    assert [p.id for p in store.load_projects()] == ["a", "b"]
+
+
+def test_a_project_order_must_be_a_list_of_ids(workbench_home: Path) -> None:
+    assert _client().put("/api/projects/order", json={"ids": "a"}).status_code == 400
+
+
+def test_workspaces_can_be_reordered(workbench_home: Path) -> None:
+    store.add_project("r", "")
+    for name in ("a", "b", "c"):
+        workspaces.create_workspace_dir(Workspace(project_id="r", name=name))
+    client = _client()
+    assert client.put("/api/projects/r/workspace-order", json={"names": ["b", "c", "a"]}).status_code == 200
+    assert [w["name"] for w in client.get("/api/projects").json()[0]["workspaces"]] == ["b", "c", "a"]
+
+
+def test_a_stale_workspace_order_is_refused(workbench_home: Path) -> None:
+    store.add_project("r", "")
+    for name in ("a", "b"):
+        workspaces.create_workspace_dir(Workspace(project_id="r", name=name))
+    client = _client()
+    assert client.put("/api/projects/r/workspace-order", json={"names": ["a"]}).status_code == 409
+    assert client.put("/api/projects/r/workspace-order", json={"names": ["a", "b", "x"]}).status_code == 409
+    assert client.put("/api/projects/nope/workspace-order", json={"names": []}).status_code == 404
+    assert store.find_project("r").workspace_order == ()  # type: ignore[union-attr]
+
+
+def test_new_workspaces_go_after_the_saved_order_and_stale_names_are_skipped() -> None:
+    found = tuple(Workspace(project_id="r", name=n) for n in ("a", "b", "new-2", "new-1", "c"))
+    ordered = workspaces.order_workspaces(found, ("c", "gone", "a", "b"))
+    assert [w.name for w in ordered] == ["c", "a", "b", "new-1", "new-2"]
+
+
+def test_editing_a_project_keeps_its_workspace_order(workbench_home: Path) -> None:
+    store.add_project("r", "")
+    store.set_workspace_order("r", ("b", "a"))
+    assert _client().patch("/api/projects/r", json={"name": "renamed"}).status_code == 200
+    assert store.find_project("r").workspace_order == ("b", "a")  # type: ignore[union-attr]

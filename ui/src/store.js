@@ -223,6 +223,49 @@ export async function deleteProject(projectId) {
   await refreshProjects();
 }
 
+/** `items` with the one whose key is `moved` taken out and put back just before or after `target`. */
+function reordered(items, key, moved, target, after) {
+  const item = items.find((x) => key(x) === moved);
+  const rest = items.filter((x) => key(x) !== moved);
+  const at = rest.findIndex((x) => key(x) === target);
+  if (!item || at < 0) return null;
+  rest.splice(after ? at + 1 : at, 0, item);
+  return rest;
+}
+
+/** Shown in the new order straight away, then saved; a refused save re-reads the real order, so
+ *  the rail never keeps showing an order the server doesn't have. */
+async function saveOrder(show, save) {
+  show();
+  try {
+    await save();
+  } catch (err) {
+    await refreshProjects();
+    throw err;
+  }
+}
+
+/** Move a project to just before or after another one in the sidebar. */
+export async function moveProject(projectId, targetId, after) {
+  const next = reordered(state.projects, (p) => p.id, projectId, targetId, after);
+  if (!next) return;
+  await saveOrder(() => setState('projects', next), () => api.reorderProjects(next.map((p) => p.id)));
+}
+
+/** Move a workspace to just before or after another of the same project. The order saved covers
+ *  live and archived workspaces together, but a move only ever lands next to one from its own
+ *  section, so each section keeps its own relative order. */
+export async function moveWorkspace(projectId, workspaceId, targetId, after) {
+  const index = state.projects.findIndex((p) => p.id === projectId);
+  if (index < 0) return;
+  const workspaces = reordered(state.projects[index].workspaces, (w) => w.id, workspaceId, targetId, after);
+  if (!workspaces) return;
+  await saveOrder(
+    () => setState('projects', index, 'workspaces', workspaces),
+    () => api.reorderWorkspaces(projectId, workspaces.map((w) => w.name)),
+  );
+}
+
 export async function createWorkspace(projectId, name, ref, billing) {
   const workspace = await api.createWorkspace(projectId, name, ref, billing);
   await refreshProjects();
