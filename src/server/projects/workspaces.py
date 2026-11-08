@@ -50,6 +50,13 @@ def list_workspaces(project_id: str) -> tuple[Workspace, ...]:
     return tuple(Workspace(project_id=project_id, name=n) for n in names)
 
 
+def order_workspaces(workspaces: tuple[Workspace, ...], order: tuple[str, ...]) -> tuple[Workspace, ...]:
+    """Sort workspaces into a saved sidebar order. Names in `order` that no longer exist are
+    skipped, and workspaces it doesn't mention (made since it was saved) go last, by name."""
+    rank = {name: i for i, name in enumerate(order)}
+    return tuple(sorted(workspaces, key=lambda w: (rank.get(w.name, len(rank)), w.name)))
+
+
 def unique_workspace_name(project_id: str, base: str) -> str:
     """A free workspace name derived from `base`, which need not be a legal name itself."""
     cleaned = re.sub(r"[^A-Za-z0-9._-]+", "-", base).strip("-._")[:56]

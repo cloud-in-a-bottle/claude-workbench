@@ -4,6 +4,8 @@ import {
   archiveWorkspace,
   deleteProject,
   deleteWorkspace,
+  moveProject,
+  moveWorkspace,
   openWorkspace,
   state,
   toggleSidebar,
@@ -46,6 +48,78 @@ export function Sidebar() {
     else next.add(key);
     setCollapsed(next);
     localStorage.setItem(COLLAPSED_KEY, JSON.stringify([...next]));
+  }
+
+  /** What is being dragged — `{ kind: 'project', id }` or `{ kind: 'workspace', id, projectId,
+   *  archived }` — and where it would land: `{ id, after }`, beside the row with that id. */
+  const [dragging, setDragging] = createSignal(null);
+  const [dropAt, setDropAt] = createSignal(null);
+
+  /** Drag-and-drop handlers for one row. `item` is what the row would drag, and a drop is only
+   *  accepted from a drag that `accepts` — a project onto a project, a workspace onto another of
+   *  the same project and section. Moving a workspace to another project would mean moving its
+   *  directory, which a drag is far too casual a gesture for. */
+  function dragHandlers(item, accepts, move) {
+    const over = (e) => {
+      const drag = dragging();
+      if (!drag || !accepts(drag)) return;
+      e.preventDefault();
+      // Handled here, so a workspace row doesn't also light up the project it sits in.
+      e.stopPropagation();
+      e.dataTransfer.dropEffect = 'move';
+      const rect = e.currentTarget.getBoundingClientRect();
+      const after = e.clientY > rect.top + rect.height / 2;
+      const current = dropAt();
+      if (current?.id !== item.id || current.after !== after) setDropAt({ id: item.id, after });
+    };
+    return {
+      draggable: true,
+      onDragStart: (e) => {
+        e.stopPropagation();
+        e.dataTransfer.effectAllowed = 'move';
+        // Firefox won't start a drag that carries no data.
+        e.dataTransfer.setData('text/plain', item.id);
+        setDragging(item);
+      },
+      onDragEnd: () => {
+        setDragging(null);
+        setDropAt(null);
+      },
+      onDragOver: over,
+      onDragEnter: over,
+      onDrop: (e) => {
+        const drag = dragging();
+        const at = dropAt();
+        if (!drag || !accepts(drag) || !at) return;
+        e.preventDefault();
+        e.stopPropagation();
+        setDragging(null);
+        setDropAt(null);
+        if (drag.id !== at.id) run(() => move(drag, at))();
+      },
+    };
+  }
+
+  const dropClass = (id) => ({
+    'drop-before': dropAt()?.id === id && !dropAt().after,
+    'drop-after': dropAt()?.id === id && dropAt().after,
+    dragging: dragging()?.id === id,
+  });
+
+  function projectDrag(project) {
+    return dragHandlers(
+      { kind: 'project', id: project.id },
+      (drag) => drag.kind === 'project',
+      (drag, at) => moveProject(drag.id, at.id, at.after),
+    );
+  }
+
+  function workspaceDrag(project, workspace) {
+    return dragHandlers(
+      { kind: 'workspace', id: workspace.id, projectId: project.id, archived: workspace.archived },
+      (drag) => drag.kind === 'workspace' && drag.projectId === project.id && drag.archived === workspace.archived,
+      (drag, at) => moveWorkspace(project.id, drag.id, at.id, at.after),
+    );
   }
 
   const stop = (fn) => (e) => {
@@ -119,7 +193,7 @@ export function Sidebar() {
           <Show when={state.projects.length} fallback={<p class="sidebar-empty">No projects yet. Add one with +.</p>}>
             <For each={state.projects}>
               {(project) => (
-                <div class="project">
+                <div class="project" classList={dropClass(project.id)} {...projectDrag(project)}>
                   <div class="project-row" onClick={() => toggleSection(project.id)} title={project.repo_url || 'Folder project: workspaces start empty'}>
                     <span class="project-caret">{collapsed().has(project.id) ? '▶' : '▼'}</span>
                     <span class="project-name">{project.name}</span>
@@ -157,7 +231,8 @@ export function Sidebar() {
                         {(workspace) => (
                           <div
                             class="workspace-row"
-                            classList={{ active: workspace.id === state.activeWorkspaceId }}
+                            classList={{ active: workspace.id === state.activeWorkspaceId, ...dropClass(workspace.id) }}
+                            {...workspaceDrag(project, workspace)}
                             onClick={() => openWorkspace(workspace.id)}
                             onContextMenu={(e) => openWorkspaceMenu(e, project, workspace)}
                           >
@@ -190,6 +265,8 @@ export function Sidebar() {
                             {(workspace) => (
                               <div
                                 class="workspace-row archived"
+                                classList={dropClass(workspace.id)}
+                                {...workspaceDrag(project, workspace)}
                                 title="Archived — nothing is running. Click to bring it back."
                                 onClick={run(() => unarchiveWorkspace(workspace.id))}
                                 onContextMenu={(e) => openWorkspaceMenu(e, project, workspace)}

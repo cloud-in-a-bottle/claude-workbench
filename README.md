@@ -128,6 +128,8 @@ The mirror is what makes a second workspace cheap: the first one pays for a netw
 
 Workspaces are read back off disk rather than tracked in a file of their own, so the sidebar can't drift out of sync with what's actually there. All of it lives under `$HOME`, which openhost points at the app's persistent data dir, so projects and workspaces survive redeploys.
 
+Drag projects, and workspaces within a project, to reorder them in the sidebar. Project order is the order of `projects.json`; each project also remembers a `workspace_order` by name, which is only a preference layered over what's on disk — names that no longer exist are skipped, and workspaces it doesn't mention yet go last, alphabetically. A workspace can't be dragged to another project, since that would mean moving its directory.
+
 ### Creating one
 
 Add a project with **+** in the sidebar (a clone URL is the only thing required); the workbench checks the repo is reachable before saving it, so a typo fails once, there and then, rather than in every workspace afterwards. Then **+** next to a project creates a workspace in it: pick a name, and optionally a branch, tag or commit — blank means the project's starting branch. A workspace does not create a branch for you.

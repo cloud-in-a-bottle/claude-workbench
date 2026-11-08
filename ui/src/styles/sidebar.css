@@ -130,3 +130,8 @@ body.sidebar-hidden #sidebar-toggle { display: flex; }
   line-height: 1.4;
   cursor: pointer;
 }
+
+/* Drag to reorder: the row being dragged fades, and an accent line marks where it would land. */
+.project.dragging, .workspace-row.dragging { opacity: 0.4; }
+.project.drop-before, .workspace-row.drop-before { box-shadow: inset 0 2px 0 var(--accent); }
+.project.drop-after, .workspace-row.drop-after { box-shadow: inset 0 -2px 0 var(--accent); }

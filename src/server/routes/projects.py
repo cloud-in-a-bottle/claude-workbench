@@ -2,12 +2,14 @@ import shutil
 from collections.abc import Collection
 from typing import Any
 
+import attr
 from litestar import Request
 from litestar import Response
 from litestar import delete
 from litestar import get
 from litestar import patch
 from litestar import post
+from litestar import put
 from litestar.params import FromPath
 
 from server.billing import MODES
@@ -32,12 +34,15 @@ from server.projects.store import find_project
 from server.projects.store import find_project_by_repo
 from server.projects.store import load_projects
 from server.projects.store import remove_project
+from server.projects.store import reorder_projects
 from server.projects.store import save_projects
+from server.projects.store import set_workspace_order
 from server.projects.teardown import teardown_workspace
 from server.projects.workspaces import Workspace
 from server.projects.workspaces import create_workspace_dir
 from server.projects.workspaces import list_workspaces
 from server.projects.workspaces import mirror_path
+from server.projects.workspaces import order_workspaces
 from server.projects.workspaces import parse_workspace_id
 from server.projects.workspaces import unique_workspace_name
 from server.routes.common import JsonDict
@@ -76,7 +81,10 @@ def project_json(project: Project) -> JsonDict:
         "repo_url": project.repo_url,
         "setup": project.setup,
         "default_branch": project.default_branch,
-        "workspaces": [workspace_json(w, billing, archived) for w in list_workspaces(project.id)],
+        "workspaces": [
+            workspace_json(w, billing, archived)
+            for w in order_workspaces(list_workspaces(project.id), project.workspace_order)
+        ],
     }
 
 
@@ -192,8 +200,8 @@ async def update_project(project_id: FromPath[str], request: Request[Any, Any, A
         if failed is not None:
             return failed
 
-    updated = Project(
-        id=project.id,
+    updated = attr.evolve(
+        project,
         name=name,
         repo_url=repo_url,
         setup=str(data.get("setup", project.setup)),
@@ -201,6 +209,37 @@ async def update_project(project_id: FromPath[str], request: Request[Any, Any, A
     )
     save_projects(tuple(updated if p.id == project.id else p for p in load_projects()))
     return Response(content=project_json(updated))
+
+
+@put("/api/projects/order", status_code=200)
+async def reorder_projects_route(request: Request[Any, Any, Any]) -> Response[JsonDict]:
+    """Set the order projects are listed in. `ids` must name every project exactly once; a 409 means
+    the caller's list is stale and it should re-read the projects."""
+    ids = (await json_body(request)).get("ids")
+    if not isinstance(ids, list) or not all(isinstance(i, str) for i in ids):
+        return error(400, error="bad_request", message="ids must be a list of project ids")
+    try:
+        reorder_projects(ids)
+    except ValueError as exc:
+        return error(409, error="stale_order", message=str(exc))
+    return Response(content={"ok": True})
+
+
+@put("/api/projects/{project_id:str}/workspace-order", status_code=200)
+async def reorder_workspaces_route(project_id: FromPath[str], request: Request[Any, Any, Any]) -> Response[JsonDict]:
+    """Set the order a project's workspaces are listed in, live and archived alike. `names` must
+    name every workspace of the project exactly once; a 409 means the caller's list is stale."""
+    project = find_project(project_id)
+    if project is None:
+        return error(404, error="not_found", message=f"no project {project_id}")
+    names = (await json_body(request)).get("names")
+    if not isinstance(names, list) or not all(isinstance(n, str) for n in names):
+        return error(400, error="bad_request", message="names must be a list of workspace names")
+    on_disk = {w.name for w in list_workspaces(project_id)}
+    if len(names) != len(on_disk) or set(names) != on_disk:
+        return error(409, error="stale_order", message="the order must list every workspace exactly once")
+    set_workspace_order(project_id, tuple(names))
+    return Response(content={"ok": True})
 
 
 async def _refuse_attach(project: Project, repo_url: str) -> Response[JsonDict] | None:

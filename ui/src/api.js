@@ -28,6 +28,10 @@ export const createProject = (repoUrl, name, setup, defaultBranch) =>
   request('POST', '/api/projects', { repo_url: repoUrl, name, setup, default_branch: defaultBranch });
 export const updateProject = (id, patch) => request('PATCH', `/api/projects/${encodeURIComponent(id)}`, patch);
 export const deleteProject = (id) => request('DELETE', `/api/projects/${encodeURIComponent(id)}`);
+/** Sidebar order. Each takes the complete list, and a 409 means it was built from a stale one. */
+export const reorderProjects = (ids) => request('PUT', '/api/projects/order', { ids });
+export const reorderWorkspaces = (projectId, names) =>
+  request('PUT', `/api/projects/${encodeURIComponent(projectId)}/workspace-order`, { names });
 
 export const createWorkspace = (projectId, name, ref, billing) =>
   request('POST', '/api/workspaces', { project_id: projectId, name, ref, billing });
