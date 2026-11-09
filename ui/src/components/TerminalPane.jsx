@@ -339,8 +339,14 @@ export function TerminalPane(props) {
               class="busy-btn"
               type="button"
               onClick={async () => {
-                setBusy('');
-                await api.kickTab(props.tab.id);
+                try {
+                  await api.kickTab(props.tab.id);
+                } catch (err) {
+                  // Clearing the overlay first and connecting only on success left a blank panel
+                  // whenever the kick failed: no overlay, no connection, and nothing saying why.
+                  setBusy(`Couldn't disconnect the other browser: ${err.message}`);
+                  return;
+                }
                 connect();
               }}
             >

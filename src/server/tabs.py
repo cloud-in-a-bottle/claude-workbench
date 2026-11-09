@@ -618,78 +618,83 @@ async def handle_terminal_ws(socket: WebSocket[Any, Any, Any]) -> None:
         return
 
     await tab.lock.acquire()
-    tab.connected = True
-    kick = asyncio.Event()
-    tab.kick_event = kick
-    q: asyncio.Queue[bytes | None] = asyncio.Queue(maxsize=512)
-    tab.client_queue = q
-
-    # Wait for the client's initial resize before replaying the output buffer.
-    # The client always sends resize in ws.onopen (active tabs use measured size,
-    # background tabs use last known size). Without this, output_buf would be
-    # written into a terminal that hasn't been sized yet, causing garbled display.
+    # Everything from here on is inside the try, so the lock is released however this ends. It used
+    # to start only once the replay was done, so a client that dropped mid-replay -- a phone
+    # switching apps, say -- raised out of the send with the lock still held. Every later
+    # connection was then told the tab was open elsewhere, and a kick timed out waiting for it.
     try:
-        first_msg = await asyncio.wait_for(socket.receive_data(mode="binary"), timeout=1.0)
-        if isinstance(first_msg, bytes | bytearray) and len(first_msg) > 1:
-            if first_msg[0] == 0x01:
-                try:
-                    ctrl = json.loads(bytes(first_msg[1:]))
-                    if ctrl.get("type") == "resize":
-                        set_winsize(tab.master_fd, int(ctrl["rows"]), int(ctrl["cols"]))
-                except Exception:
-                    pass
-            elif first_msg[0] == 0x00:
-                write_to_tab(tab, bytes(first_msg[1:]))
-    except Exception:
-        pass
+        tab.connected = True
+        kick = asyncio.Event()
+        tab.kick_event = kick
+        q: asyncio.Queue[bytes | None] = asyncio.Queue(maxsize=512)
+        tab.client_queue = q
 
-    # Replayed in pieces rather than one frame: the buffer is megabytes now, and a frame that large
-    # has to survive every proxy between here and the browser. Live output is already split at
-    # arbitrary read boundaries, so the client handles a split the same way either way.
-    for frame in replay_frames(bytes(tab.output_buf)):
-        await socket.send_data(b"\x00" + frame, mode="binary")
-
-    async def pty_to_ws() -> None:
+        # Wait for the client's initial resize before replaying the output buffer.
+        # The client always sends resize in ws.onopen (active tabs use measured size,
+        # background tabs use last known size). Without this, output_buf would be
+        # written into a terminal that hasn't been sized yet, causing garbled display.
         try:
-            while True:
-                chunk = await q.get()
-                if chunk is None:
-                    await socket.send_data(b"\x01" + json.dumps({"type": "exit"}).encode(), mode="binary")
-                    break
-                if chunk is _KICKED_MSG:
-                    await socket.send_data(_KICKED_MSG, mode="binary")
-                    break
-                await socket.send_data(b"\x00" + chunk, mode="binary")
-        except Exception:
-            pass
-
-    async def ws_to_pty() -> None:
-        try:
-            while True:
-                msg = await socket.receive_data(mode="binary")
-                if isinstance(msg, bytes | bytearray) and len(msg) > 0:
-                    kind = msg[0]
-                    payload = bytes(msg[1:])
-                    if kind == 0x00:
-                        write_to_tab(tab, payload)
-                    elif kind == 0x01:
-                        ctrl = json.loads(payload)
+            first_msg = await asyncio.wait_for(socket.receive_data(mode="binary"), timeout=1.0)
+            if isinstance(first_msg, bytes | bytearray) and len(first_msg) > 1:
+                if first_msg[0] == 0x01:
+                    try:
+                        ctrl = json.loads(bytes(first_msg[1:]))
                         if ctrl.get("type") == "resize":
                             set_winsize(tab.master_fd, int(ctrl["rows"]), int(ctrl["cols"]))
-                elif isinstance(msg, str):
-                    write_to_tab(tab, msg.encode())
+                    except Exception:
+                        pass
+                elif first_msg[0] == 0x00:
+                    write_to_tab(tab, bytes(first_msg[1:]))
         except Exception:
             pass
 
-    async def kick_watcher() -> None:
-        await kick.wait()
+        async def pty_to_ws() -> None:
+            try:
+                # Replayed in pieces rather than one frame: the buffer is megabytes now, and a frame
+                # that large has to survive every proxy between here and the browser. Live output is
+                # already split at arbitrary read boundaries, so the client handles a split the same
+                # way either way. Replayed from in here, alongside kick_watcher, so a kick can still
+                # cut off a client whose connection stalled halfway through it.
+                for frame in replay_frames(bytes(tab.output_buf)):
+                    await socket.send_data(b"\x00" + frame, mode="binary")
+                while True:
+                    chunk = await q.get()
+                    if chunk is None:
+                        await socket.send_data(b"\x01" + json.dumps({"type": "exit"}).encode(), mode="binary")
+                        break
+                    if chunk is _KICKED_MSG:
+                        await socket.send_data(_KICKED_MSG, mode="binary")
+                        break
+                    await socket.send_data(b"\x00" + chunk, mode="binary")
+            except Exception:
+                pass
 
-    tasks: list[asyncio.Task[None]] = [
-        asyncio.create_task(pty_to_ws()),
-        asyncio.create_task(ws_to_pty()),
-        asyncio.create_task(kick_watcher()),
-    ]
-    try:
+        async def ws_to_pty() -> None:
+            try:
+                while True:
+                    msg = await socket.receive_data(mode="binary")
+                    if isinstance(msg, bytes | bytearray) and len(msg) > 0:
+                        kind = msg[0]
+                        payload = bytes(msg[1:])
+                        if kind == 0x00:
+                            write_to_tab(tab, payload)
+                        elif kind == 0x01:
+                            ctrl = json.loads(payload)
+                            if ctrl.get("type") == "resize":
+                                set_winsize(tab.master_fd, int(ctrl["rows"]), int(ctrl["cols"]))
+                    elif isinstance(msg, str):
+                        write_to_tab(tab, msg.encode())
+            except Exception:
+                pass
+
+        async def kick_watcher() -> None:
+            await kick.wait()
+
+        tasks: list[asyncio.Task[None]] = [
+            asyncio.create_task(pty_to_ws()),
+            asyncio.create_task(ws_to_pty()),
+            asyncio.create_task(kick_watcher()),
+        ]
         _, pending_tasks = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
         for t in pending_tasks:
             t.cancel()

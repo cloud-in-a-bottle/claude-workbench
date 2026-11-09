@@ -390,3 +390,84 @@ def test_a_caller_can_still_override_the_environment_a_tab_starts_with(workbench
         return bytes(tab.output_buf).decode(errors="replace")
 
     assert asyncio.run(spawn_and_read()).strip() == "caller-wins"
+
+
+class _FakeTerminalSocket:
+    """Just enough of a litestar WebSocket for handle_terminal_ws: the client sends its resize, then
+    each send is handed to `on_send`, which can raise (a dropped client) or hang (a stalled one)."""
+
+    def __init__(self, tab_id: str, on_send: Any) -> None:
+        self.query_params = {"tab": tab_id}
+        self._on_send = on_send
+        self._first = True
+
+    async def accept(self) -> None:
+        pass
+
+    async def send_data(self, data: bytes, mode: str = "text") -> None:
+        await self._on_send(data)
+
+    async def receive_data(self, mode: str = "text") -> bytes:
+        if self._first:
+            self._first = False
+            return b"\x01" + json.dumps({"type": "resize", "rows": 24, "cols": 80}).encode()
+        await asyncio.Event().wait()  # the client never types
+        raise AssertionError("unreachable")
+
+
+def _tab_with_output() -> ServerTab:
+    r, w = os.pipe()
+    os.close(w)
+    tab = ServerTab(id="replaying", label="t", master_fd=r, proc=MagicMock())
+    tab.output_buf.extend(b"x" * (tabs_module._REPLAY_CHUNK * 3))
+    _tabs[tab.id] = tab
+    return tab
+
+
+def test_a_client_that_drops_mid_replay_leaves_the_tab_free(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The lock used to be taken before the try that releases it, with the replay in between.
+
+    A phone that switched apps halfway through a replay made the send raise, and the tab stayed
+    locked with nobody attached: every later visit was told it was open in another browser tab,
+    and a kick timed out waiting for a lock no one would ever release.
+    """
+    monkeypatch.setattr(tabs_module, "set_winsize", lambda *a: None)
+    tab = _tab_with_output()
+
+    async def drop(data: bytes) -> None:
+        raise ConnectionError("client went away")
+
+    async def connect_and_drop() -> None:
+        await tabs_module.handle_terminal_ws(_FakeTerminalSocket(tab.id, drop))  # type: ignore[arg-type]
+
+    try:
+        asyncio.run(connect_and_drop())
+        assert not tab.lock.locked()
+        assert not tab.connected
+    finally:
+        os.close(tab.master_fd)
+
+
+def test_a_kick_cuts_off_a_client_that_stalled_mid_replay(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A connection that stops reading -- a phone gone to sleep -- leaves a send waiting forever,
+    and the replay has to give way to a kick like anything else does."""
+    monkeypatch.setattr(tabs_module, "set_winsize", lambda *a: None)
+    tab = _tab_with_output()
+
+    async def stall(data: bytes) -> None:
+        await asyncio.Event().wait()
+
+    async def connect_stall_then_kick() -> None:
+        handler = asyncio.create_task(
+            tabs_module.handle_terminal_ws(_FakeTerminalSocket(tab.id, stall))  # type: ignore[arg-type]
+        )
+        while not tab.connected:
+            await asyncio.sleep(0.01)
+        await asyncio.wait_for(tabs_module.kick_tab(tab), timeout=2)
+        await asyncio.wait_for(handler, timeout=2)
+
+    try:
+        asyncio.run(connect_stall_then_kick())
+        assert not tab.lock.locked()
+    finally:
+        os.close(tab.master_fd)
