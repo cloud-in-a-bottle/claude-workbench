@@ -2,6 +2,8 @@
 <html lang="en" data-theme="{{ theme }}">
 <head>
   <meta charset="utf-8">
+  {# maximum-scale stops iOS zooming in whenever the terminal takes focus; pinch zoom still works. #}
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, interactive-widget=resizes-content">
   <title>claude-workbench</title>
   {# themes.css is linked rather than bundled: it has to apply before the app renders, and the side
      panel's own page shares it. #}

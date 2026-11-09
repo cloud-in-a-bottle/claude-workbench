@@ -10,6 +10,7 @@ import {
   url,
   width,
 } from '../sidePanel';
+import { isMobile, mobilePanelOpen, setMobilePanelOpen } from '../mobile';
 import { theme } from '../store';
 
 /** A resizable pane beside the terminal that loads any URL in an iframe.
@@ -54,9 +55,13 @@ export function SidePanel() {
     if (value) setUrl(value);
   }
 
+  // On a phone the panel stands in for the terminal instead of sharing the row with it.
+  const shown = () => (isMobile() ? mobilePanelOpen() : !hidden());
+  const hide = () => (isMobile() ? setMobilePanelOpen(false) : setHidden(true));
+
   // Hiding or resizing changes how much room the terminal has.
   createEffect(() => {
-    hidden();
+    shown();
     width();
     queueMicrotask(relayout);
   });
@@ -81,18 +86,20 @@ export function SidePanel() {
   });
 
   return (
-    <Show when={!hidden()}>
-      <div
-        id="sp-divider"
-        role="separator"
-        aria-orientation="vertical"
-        aria-label="Resize side panel"
-        tabIndex={0}
-        onMouseDown={startDrag}
-        onDblClick={() => setWidth(DEFAULT_SIDE)}
-        onKeyDown={onDividerKey}
-      />
-      <aside id="sp-side" style={{ flex: `0 0 ${width()}px` }}>
+    <Show when={shown()}>
+      <Show when={!isMobile()}>
+        <div
+          id="sp-divider"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label="Resize side panel"
+          tabIndex={0}
+          onMouseDown={startDrag}
+          onDblClick={() => setWidth(DEFAULT_SIDE)}
+          onKeyDown={onDividerKey}
+        />
+      </Show>
+      <aside id="sp-side" style={{ flex: isMobile() ? '1 1 auto' : `0 0 ${width()}px` }}>
         <form id="sp-bar" onSubmit={navigate}>
           <input id="sp-url" ref={input} value={url()} spellcheck={false} aria-label="Side panel URL" />
           <button class="sp-btn" type="button" title="Reload" onClick={() => frame.contentWindow.location.reload()}>
@@ -101,7 +108,7 @@ export function SidePanel() {
           <button class="sp-btn" type="button" title="Open in new tab" onClick={() => window.open(url(), '_blank')}>
             &#8599;
           </button>
-          <button class="sp-btn" type="button" title="Hide panel" onClick={() => setHidden(true)}>
+          <button class="sp-btn" type="button" title="Hide panel" onClick={hide}>
             &times;
           </button>
         </form>

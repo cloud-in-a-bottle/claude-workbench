@@ -1,5 +1,6 @@
 import { For, Show, createSignal } from 'solid-js';
 
+import { isMobile, setDrawerOpen } from '../mobile';
 import {
   archiveWorkspace,
   deleteProject,
@@ -132,6 +133,26 @@ export function Sidebar() {
     fn().catch((err) => setFailure(err.message));
   };
 
+  /** Pick a workspace. On a phone that also puts the drawer away, since the terminal is what you
+   *  picked it to see. */
+  function pick(fn) {
+    setDrawerOpen(false);
+    fn();
+  }
+
+  /** The rail's own hide button: on a phone it closes the drawer, which is all the hiding there is. */
+  function hideRail() {
+    if (isMobile()) setDrawerOpen(false);
+    else toggleSidebar();
+  }
+
+  /** The workspace menu from its ⋯ button, for touch screens, which have no right click. */
+  function openWorkspaceMenuFrom(e, project, workspace) {
+    e.stopPropagation();
+    const rect = e.currentTarget.getBoundingClientRect();
+    openWorkspaceMenu({ preventDefault() {}, clientX: rect.left, clientY: rect.bottom }, project, workspace);
+  }
+
   /** The right-click menu on a workspace row. Archiving is only offered here: it isn't a thing you
    *  reach for often, and a row button for it would sit next to delete, which is not. */
   function openWorkspaceMenu(e, project, workspace) {
@@ -185,7 +206,7 @@ export function Sidebar() {
           >
             &#9881;
           </button>
-          <button id="sidebar-collapse" type="button" title="Hide the sidebar" onClick={toggleSidebar}>
+          <button id="sidebar-collapse" type="button" title="Hide the sidebar" onClick={hideRail}>
             &#8676;
           </button>
         </div>
@@ -233,7 +254,7 @@ export function Sidebar() {
                             class="workspace-row"
                             classList={{ active: workspace.id === state.activeWorkspaceId, ...dropClass(workspace.id) }}
                             {...workspaceDrag(project, workspace)}
-                            onClick={() => openWorkspace(workspace.id)}
+                            onClick={() => pick(() => openWorkspace(workspace.id))}
                             onContextMenu={(e) => openWorkspaceMenu(e, project, workspace)}
                           >
                             {/* The dot carries the path and the rest of the git status in its
@@ -243,7 +264,15 @@ export function Sidebar() {
                             <WorkspaceAgentDot workspace={workspace} />
                             <WorkspaceSync workspace={workspace} />
                             <button
-                              class="row-btn danger"
+                              class="row-btn more"
+                              type="button"
+                              title="More"
+                              onClick={(e) => openWorkspaceMenuFrom(e, project, workspace)}
+                            >
+                              &#8943;
+                            </button>
+                            <button
+                              class="row-btn danger ws-delete"
                               type="button"
                               title="Delete workspace"
                               onClick={stop(() => setDialog({ kind: 'delete-workspace', project, workspace }))}
@@ -268,14 +297,22 @@ export function Sidebar() {
                                 classList={dropClass(workspace.id)}
                                 {...workspaceDrag(project, workspace)}
                                 title="Archived — nothing is running. Click to bring it back."
-                                onClick={run(() => unarchiveWorkspace(workspace.id))}
+                                onClick={() => pick(run(() => unarchiveWorkspace(workspace.id)))}
                                 onContextMenu={(e) => openWorkspaceMenu(e, project, workspace)}
                               >
                                 {/* No status or agent dots: both are polled, and an archived
                                     workspace is left out of those polls on purpose. */}
                                 <span class="workspace-name">{workspace.name}</span>
                                 <button
-                                  class="row-btn danger"
+                                  class="row-btn more"
+                                  type="button"
+                                  title="More"
+                                  onClick={(e) => openWorkspaceMenuFrom(e, project, workspace)}
+                                >
+                                  &#8943;
+                                </button>
+                                <button
+                                  class="row-btn danger ws-delete"
                                   type="button"
                                   title="Delete workspace"
                                   onClick={stop(() => setDialog({ kind: 'delete-workspace', project, workspace }))}
