@@ -5,9 +5,11 @@ import { Show, createEffect, createSignal, onCleanup, onMount } from 'solid-js';
 
 import * as api from '../api';
 import { createLinkSupport } from '../links';
+import { clearKeyTarget, ctrlArmed, isMobile, setCtrlArmed, setKeyTarget } from '../mobile';
 import { filterOsc52Noise, handleOsc52 } from '../osc52';
 import { forgetTab, state, theme } from '../store';
 import { xtermTheme } from '../themes';
+import { attachTouchScroll } from '../touchScroll';
 
 const RECONNECT_POLL_MS = 2000;
 // xterm keeps 1000 lines by default, which a long claude session scrolls past in minutes — the
@@ -23,6 +25,29 @@ const TERMINAL_FONT = {
   fontFamily: 'Monaco, Menlo, "DejaVu Sans Mono", "Liberation Mono", "Courier New", monospace',
   fontSize: 17,
 };
+// Small enough that a phone held upright still gets ~45 columns.
+const MOBILE_FONT_SIZE = 12;
+
+/** What each key on the phone's extra-keys bar sends. Arrows depend on the cursor-key mode the
+ *  program has asked for, which is why they're a function of the terminal. */
+const EXTRA_KEYS = {
+  esc: () => '\x1b',
+  tab: () => '\t',
+  'shift-tab': () => '\x1b[Z',
+  'ctrl-c': () => '\x03',
+  up: (app) => (app ? '\x1bOA' : '\x1b[A'),
+  down: (app) => (app ? '\x1bOB' : '\x1b[B'),
+  right: (app) => (app ? '\x1bOC' : '\x1b[C'),
+  left: (app) => (app ? '\x1bOD' : '\x1b[D'),
+};
+
+/** A typed character as Ctrl would send it: ^A..^Z and the handful of punctuation keys that have
+ *  one. Anything else goes through unchanged. */
+function withCtrl(data) {
+  if (data.length !== 1) return data;
+  const code = data.toUpperCase().charCodeAt(0);
+  return code >= 0x40 && code <= 0x5f ? String.fromCharCode(code & 0x1f) : data;
+}
 
 function wsUrl(tabId) {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
@@ -142,6 +167,20 @@ export function TerminalPane(props) {
     };
   }
 
+  function send(data) {
+    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+    const enc = new TextEncoder().encode(data);
+    const buf = new Uint8Array(1 + enc.length);
+    buf[0] = 0x00;
+    buf.set(enc, 1);
+    socket.send(buf.buffer);
+  }
+
+  /** How the phone's extra-keys bar reaches this terminal while it has the keyboard. */
+  const keyTarget = {
+    sendKey: (name) => send(EXTRA_KEYS[name](term.modes.applicationCursorKeysMode)),
+  };
+
   function copySelection() {
     const selection = term.getSelection();
     if (!selection) return false;
@@ -198,6 +237,7 @@ export function TerminalPane(props) {
     onCleanup(links.dispose);
     term = new Terminal({
       ...TERMINAL_FONT,
+      fontSize: isMobile() ? MOBILE_FONT_SIZE : TERMINAL_FONT.fontSize,
       cursorBlink: false,
       cursorStyle: 'block',
       scrollback: SCROLLBACK_LINES,
@@ -208,22 +248,28 @@ export function TerminalPane(props) {
     term.loadAddon(fit);
     term.loadAddon(links.addon);
     term.open(host);
+    onCleanup(attachTouchScroll(host, term, send));
     term.attachCustomKeyEventHandler((e) => {
       if (e.type === 'keydown' && e.metaKey && e.key === 'c' && copySelection()) return false;
       return true;
     });
     term.onData((data) => {
-      if (!socket || socket.readyState !== WebSocket.OPEN) return;
-      const enc = new TextEncoder().encode(data);
-      const buf = new Uint8Array(1 + enc.length);
-      buf[0] = 0x00;
-      buf.set(enc, 1);
-      socket.send(buf.buffer);
+      if (ctrlArmed()) {
+        setCtrlArmed(false);
+        data = withCtrl(data);
+      }
+      send(data);
     });
     connect();
 
     host.addEventListener('paste', onPaste, true);
     onCleanup(() => host.removeEventListener('paste', onPaste, true));
+    const claimKeys = () => setKeyTarget(keyTarget);
+    term.textarea.addEventListener('focus', claimKeys);
+    onCleanup(() => {
+      term.textarea?.removeEventListener('focus', claimKeys);
+      clearKeyTarget(keyTarget);
+    });
 
     const sizeSub = props.panelApi.onDidDimensionsChange(() => refit());
     // Dockview detaches a hidden panel's DOM, so a panel coming back has to measure itself again.
@@ -242,6 +288,13 @@ export function TerminalPane(props) {
 
   createEffect(() => {
     if (term) term.options.theme = xtermTheme(theme());
+  });
+
+  createEffect(() => {
+    const size = isMobile() ? MOBILE_FONT_SIZE : TERMINAL_FONT.fontSize;
+    if (!term || term.options.fontSize === size) return;
+    term.options.fontSize = size;
+    refit();
   });
 
   onCleanup(() => {

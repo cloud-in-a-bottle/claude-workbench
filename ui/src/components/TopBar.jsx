@@ -2,6 +2,7 @@ import { Show, createSignal } from 'solid-js';
 
 import * as api from '../api';
 import { hidden as panelHidden, setHidden as setPanelHidden, enabled as sidePanelEnabled } from '../sidePanel';
+import { isMobile, mobilePanelOpen, setDrawerOpen, setMobilePanelOpen } from '../mobile';
 import { activeWorkspace, adoptTab, newTab, requestEditor, sidebarHidden, state, toggleSidebar } from '../store';
 import { Menu } from './Menu';
 import { ThemePicker } from './ThemePicker';
@@ -36,8 +37,8 @@ export function TopBar() {
 
   return (
     <div id="topbar">
-      <Show when={sidebarHidden()}>
-        <div id="sidebar-toggle" title="Show projects" onClick={toggleSidebar}>
+      <Show when={sidebarHidden() || isMobile()}>
+        <div id="sidebar-toggle" title="Show projects" onClick={() => (isMobile() ? setDrawerOpen(true) : toggleSidebar())}>
           &#9776;
         </div>
       </Show>
@@ -48,19 +49,34 @@ export function TopBar() {
       </Show>
       <Show when={state.activeWorkspaceId}>
         <button id="new-terminal" type="button" title="New terminal" onClick={(e) => openTerminalMenu(e.currentTarget)}>
-          + terminal
+          {isMobile() ? '+' : '+ terminal'}
         </button>
-        <button class="bar-btn" type="button" title="Open this workspace in VS Code" onClick={requestEditor}>
-          + editor
-        </button>
+        <Show when={!isMobile()}>
+          <button class="bar-btn" type="button" title="Open this workspace in VS Code" onClick={requestEditor}>
+            + editor
+          </button>
+        </Show>
       </Show>
       <div id="topbar-actions">
-        <Show when={sidePanelEnabled() && panelHidden()}>
+        <Show when={!isMobile() && sidePanelEnabled() && panelHidden()}>
           <button class="bar-btn" type="button" title="Show the side panel" onClick={() => setPanelHidden(false)}>
             &#9723; panel
           </button>
         </Show>
-        <ThemePicker />
+        <Show when={isMobile() && sidePanelEnabled()}>
+          <button
+            class="bar-btn"
+            classList={{ active: mobilePanelOpen() }}
+            type="button"
+            title={mobilePanelOpen() ? 'Back to the terminal' : 'Show the side panel'}
+            onClick={() => setMobilePanelOpen(!mobilePanelOpen())}
+          >
+            {mobilePanelOpen() ? 'terminal' : 'panel'}
+          </button>
+        </Show>
+        <Show when={!isMobile()}>
+          <ThemePicker />
+        </Show>
       </div>
       <Show when={menu()}>
         <Menu anchor={menu().anchor} items={menu().items} onClose={() => setMenu(null)} />

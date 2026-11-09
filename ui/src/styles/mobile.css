@@ -1,0 +1,122 @@
+/* The phone layout, switched on by body.mobile (see mobile.js). The rail becomes a drawer over the
+ * terminal, the side panel takes the terminal's place when open, and an extra-keys bar sits under
+ * the terminal. Colours come from themes.css. */
+
+/* Sized to the visual viewport, so the on-screen keyboard pushes the terminal up rather than
+ * covering its bottom rows. */
+body.mobile { height: var(--app-height, 100dvh); overflow: hidden; }
+
+/* ---- the rail as a drawer ------------------------------------------------- */
+
+body.mobile #sidebar,
+body.mobile.sidebar-hidden #sidebar {
+  display: flex;
+  position: fixed;
+  top: 0;
+  left: 0;
+  bottom: 0;
+  width: min(300px, 85vw);
+  z-index: 1500;
+  transform: translateX(-100%);
+  transition: transform 0.18s ease-out;
+  box-shadow: none;
+  font-size: 15px;
+}
+body.mobile.drawer-open #sidebar { transform: none; box-shadow: 4px 0 16px rgba(0, 0, 0, 0.4); }
+
+#drawer-backdrop { display: none; }
+body.mobile.drawer-open #drawer-backdrop {
+  display: block;
+  position: fixed;
+  inset: 0;
+  z-index: 1400;
+  background: var(--overlay-bg);
+}
+
+/* Finger-sized rows and buttons. */
+body.mobile #sidebar-head { min-height: 44px; }
+body.mobile #add-project, body.mobile #workbench-settings, body.mobile #sidebar-collapse { font-size: 18px; padding: 6px 10px; }
+body.mobile .project-row { padding: 10px 8px 10px 10px; }
+body.mobile .workspace-row { padding: 10px 8px 10px 14px; }
+body.mobile .workspace-row.archived { padding-left: 25px; }
+body.mobile .archived-head { padding: 8px 8px 8px 14px; }
+body.mobile .row-btn { font-size: 17px; padding: 4px 8px; }
+
+/* No hover on a touch screen, so the row actions are always there. Workspace delete lives in the ⋯
+ * menu instead of beside it, where a stray tap would be too easy. */
+.row-btn.more { display: none; }
+body.mobile .row-btn.more { display: inline-block; }
+body.mobile .row-btn.ws-delete { display: none; }
+@media (hover: none) {
+  .row-btn { visibility: visible; }
+}
+
+/* ---- top bar -------------------------------------------------------------- */
+
+body.mobile #topbar { min-height: 44px; font-size: 14px; }
+body.mobile #sidebar-toggle { display: flex; font-size: 20px; padding: 0 14px; align-self: stretch; }
+body.mobile #workspace-label {
+  flex: 1;
+  min-width: 0;
+  padding-left: 0;
+  font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+body.mobile #topbar-actions { margin-left: 0; }
+body.mobile #new-terminal { font-size: 20px; padding: 4px 12px; }
+body.mobile .bar-btn { font-size: 14px; padding: 6px 10px; }
+body.mobile .bar-btn.active { color: var(--bright); border-color: var(--menu-border); }
+
+/* ---- terminals ------------------------------------------------------------ */
+
+body.mobile .terminal-panel { padding: 2px; }
+/* Swipes are handled in touchScroll.js; the browser has nothing of its own to pan or zoom here. */
+.term { touch-action: none; }
+body.mobile .wb-dockview { --dv-tabs-and-actions-container-height: 36px; }
+
+#extra-keys {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 4px;
+  padding: 4px;
+  background: var(--chrome-bg);
+  border-top: 1px solid var(--border);
+}
+.extra-key {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 38px;
+  padding: 0;
+  background: var(--btn-bg);
+  border: 1px solid var(--btn-border);
+  border-radius: 5px;
+  color: var(--btn-fg);
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 13px;
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.extra-key:active { background: var(--hover-bg); color: var(--bright); }
+.extra-key.armed { background: var(--accent); border-color: var(--accent); color: var(--bg); }
+
+/* ---- side panel: over the terminal, not beside it --------------------------- */
+
+/* Laid over the terminal rather than replacing it, so the terminal keeps its size and nothing
+ * behind it reflows while the panel is up. */
+body.mobile #sp-split { position: relative; }
+body.mobile #sp-side { position: absolute; inset: 0; z-index: 20; }
+body.mobile #sp-bar { padding: 6px; }
+body.mobile #sp-url { font-size: 16px; padding: 6px 8px; }
+body.mobile .sp-btn { font-size: 18px; padding: 4px 10px; }
+
+/* ---- dialogs and menus ---------------------------------------------------- */
+
+body.mobile .wb-modal { min-width: 0; width: calc(100vw - 24px); max-height: calc(var(--app-height, 100dvh) - 24px); overflow-y: auto; box-sizing: border-box; }
+/* 16px or iOS zooms the page in on focus. */
+body.mobile .wb-modal input, body.mobile .wb-modal select, body.mobile .wb-modal textarea { font-size: 16px; }
+/* Above the drawer, which the workspace menu opens from. */
+body.mobile .tab-menu { z-index: 1600; }
+body.mobile .tab-menu-item { padding: 12px 16px; font-size: 15px; }
