@@ -248,7 +248,13 @@ export function TerminalPane(props) {
     term.loadAddon(fit);
     term.loadAddon(links.addon);
     term.open(host);
-    onCleanup(attachTouchScroll(host, term, send));
+    // A tap on a link opens it; anywhere else, it brings up the keyboard.
+    const onTap = (x, y) => {
+      const uri = links.linkAt(x, y);
+      if (uri) links.open(uri);
+      else term.focus();
+    };
+    onCleanup(attachTouchScroll(host, term, send, onTap));
     term.attachCustomKeyEventHandler((e) => {
       if (e.type === 'keydown' && e.metaKey && e.key === 'c' && copySelection()) return false;
       return true;

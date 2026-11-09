@@ -7,16 +7,18 @@ const SLOP_PX = 8;
 const FRICTION = 0.95;
 const MIN_VELOCITY = 0.02; // px per ms
 
-/** Make `host` (the element xterm is opened in) scroll `term` when swiped. Returns a disposer.
+/** Make `host` (the element xterm is opened in) scroll `term` when swiped, and call `onTap` with
+ *  the touch's client coordinates when it is tapped. Returns a disposer.
  *
  *  In the normal buffer that moves through scrollback. A full-screen program (vim, less) runs in the
  *  alternate buffer, which has none, so there it sends arrow keys instead -- what xterm does with a
  *  wheel in the same place.
  *
  *  Every touch has its default prevented from the start, so the browser never focuses xterm's
- *  textarea on its own -- left to it, a swipe that began on the textarea raised the keyboard. A
- *  tap, and only a tap, focuses the terminal here instead. A tap that stops a fling just stops it. */
-export function attachTouchScroll(host, term, send) {
+ *  textarea on its own -- left to it, a swipe that began on the textarea raised the keyboard. That
+ *  also leaves a tap with no click for xterm to see, so what a tap does (follow a link, or focus
+ *  the terminal) is `onTap`'s call. A tap that stops a fling just stops it. */
+export function attachTouchScroll(host, term, send, onTap) {
   let startY = 0;
   let lastY = 0;
   let lastTime = 0;
@@ -86,7 +88,8 @@ export function attachTouchScroll(host, term, send) {
     if (!tracking) return;
     tracking = false;
     if (!scrolling) {
-      if (e.type === 'touchend' && !stoppedFling) term.focus();
+      const touch = e.changedTouches[0];
+      if (e.type === 'touchend' && !stoppedFling && touch) onTap(touch.clientX, touch.clientY);
       return;
     }
     e.stopPropagation();

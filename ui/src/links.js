@@ -21,18 +21,50 @@ const followable = (uri) => /^https?:\/\//i.test(uri);
  *
  *  `host` only takes a class while the modifier is down, for the cursor styling in layout.css. */
 export function createLinkSupport(host, showHint) {
+  /** The followable link under the pointer, as xterm last reported it. */
+  let current = null;
+  /** Set while `linkAt` is asking xterm, so its question doesn't flash a hint. */
+  let probing = false;
+
   function hover(event, uri) {
     if (!followable(uri)) return;
-    showHint(`${MODIFIER_LABEL}-click to open ${uri}`);
+    current = uri;
+    if (!probing) showHint(`${MODIFIER_LABEL}-click to open ${uri}`);
   }
 
   function leave() {
+    current = null;
     showHint('');
   }
 
+  /** The link at a point on the screen, if there is one -- for a tap, which has no hover and no
+   *  modifier. xterm only finds links under a mouse, so this shows it one: a mousemove there, read
+   *  back through `hover`, then a mouseleave so the next question starts clean. Both of xterm's
+   *  link sources (OSC 8 and the web-links addon) answer synchronously. */
+  function linkAt(clientX, clientY) {
+    const target = document.elementFromPoint(clientX, clientY);
+    if (!target || !host.contains(target)) return null;
+    probing = true;
+    try {
+      current = null;
+      target.dispatchEvent(new MouseEvent('mousemove', { clientX, clientY, bubbles: true }));
+      return current;
+    } finally {
+      // mouseleave doesn't bubble, and the linkifier listens on one of these two.
+      for (const el of host.querySelectorAll('.xterm, .xterm-screen')) {
+        el.dispatchEvent(new MouseEvent('mouseleave', { clientX, clientY }));
+      }
+      probing = false;
+    }
+  }
+
+  /** Open a link the user picked. Same rule as a click: only http(s). */
+  function open(uri) {
+    if (followable(uri)) window.open(uri, '_blank', 'noopener,noreferrer');
+  }
+
   function activate(event, uri) {
-    if (!modifierHeld(event) || !followable(uri)) return;
-    window.open(uri, '_blank', 'noopener,noreferrer');
+    if (modifierHeld(event)) open(uri);
   }
 
   const trackModifier = (e) => host.classList.toggle('link-modifier', modifierHeld(e));
@@ -47,6 +79,8 @@ export function createLinkSupport(host, showHint) {
     linkHandler: { activate, hover, leave },
     // Bare URLs, which the addon finds by scanning the buffer -- including ones wrapped over lines.
     addon: new WebLinksAddon(activate, { hover, leave }),
+    linkAt,
+    open,
     dispose() {
       window.removeEventListener('keydown', trackModifier);
       window.removeEventListener('keyup', trackModifier);
