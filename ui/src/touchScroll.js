@@ -1,8 +1,7 @@
 // Swipe to scroll a terminal. xterm 6 scrolls with a wheel or a scrollbar but not a finger, so on
 // a phone the scrollback -- most of a Claude conversation -- was out of reach.
 
-/** How far a finger has to travel before the touch counts as a scroll rather than a tap, which
- *  must still reach xterm to focus it and bring up the keyboard. */
+/** How far a finger has to travel before the touch counts as a scroll rather than a tap. */
 const SLOP_PX = 8;
 /** Fling: how much of its velocity a released swipe keeps each frame, and when it stops. */
 const FRICTION = 0.95;
@@ -12,7 +11,11 @@ const MIN_VELOCITY = 0.02; // px per ms
  *
  *  In the normal buffer that moves through scrollback. A full-screen program (vim, less) runs in the
  *  alternate buffer, which has none, so there it sends arrow keys instead -- what xterm does with a
- *  wheel in the same place. */
+ *  wheel in the same place.
+ *
+ *  Every touch has its default prevented from the start, so the browser never focuses xterm's
+ *  textarea on its own -- left to it, a swipe that began on the textarea raised the keyboard. A
+ *  tap, and only a tap, focuses the terminal here instead. A tap that stops a fling just stops it. */
 export function attachTouchScroll(host, term, send) {
   let startY = 0;
   let lastY = 0;
@@ -22,6 +25,10 @@ export function attachTouchScroll(host, term, send) {
   // Pixels moved that haven't added up to a whole line yet.
   let carry = 0;
   let fling = 0;
+  let flinging = false;
+  // Set by a single-finger touchstart, so a lifted second finger isn't mistaken for a tap.
+  let tracking = false;
+  let stoppedFling = false;
 
   const lineHeight = () => {
     const rows = host.querySelector('.xterm-rows');
@@ -46,8 +53,12 @@ export function attachTouchScroll(host, term, send) {
   }
 
   function onStart(e) {
-    if (e.touches.length !== 1) return;
+    e.preventDefault();
+    tracking = e.touches.length === 1;
+    if (!tracking) return;
+    stoppedFling = flinging;
     cancelAnimationFrame(fling);
+    flinging = false;
     startY = lastY = e.touches[0].clientY;
     lastTime = e.timeStamp;
     velocity = 0;
@@ -71,9 +82,13 @@ export function attachTouchScroll(host, term, send) {
   }
 
   function onEnd(e) {
-    if (!scrolling) return;
-    // A scroll that ends is not a tap: don't let it place the cursor or raise the keyboard.
     e.preventDefault();
+    if (!tracking) return;
+    tracking = false;
+    if (!scrolling) {
+      if (e.type === 'touchend' && !stoppedFling) term.focus();
+      return;
+    }
     e.stopPropagation();
     scrolling = false;
     let prev = performance.now();
@@ -81,10 +96,14 @@ export function attachTouchScroll(host, term, send) {
       const dt = now - prev;
       prev = now;
       velocity *= Math.pow(FRICTION, dt / 16);
-      if (Math.abs(velocity) < MIN_VELOCITY) return;
+      if (Math.abs(velocity) < MIN_VELOCITY) {
+        flinging = false;
+        return;
+      }
       scrollBy(velocity * dt);
       fling = requestAnimationFrame(step);
     };
+    flinging = true;
     fling = requestAnimationFrame(step);
   }
 
