@@ -11,8 +11,9 @@ const WIDTH_KEY = 'workbench.sidePanel.width';
 const HIDDEN_KEY = 'workbench.sidePanel.hidden';
 
 /** How often an open page re-reads whether the panel is on and what it shows. Both are set from a
- *  terminal (the /side-by-side skill), so nothing else would tell the page they changed. */
-const SETTINGS_POLL_MS = 3000;
+ *  terminal (the /side-by-side skill), so nothing else would tell the page they changed. Slow on
+ *  purpose: a faster poll is a steady stream of round trips on a bad link, for a rare change. */
+const SETTINGS_POLL_MS = 15000;
 
 const bootstrap = window.__WORKBENCH__ || {};
 

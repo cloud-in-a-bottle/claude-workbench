@@ -13,9 +13,9 @@ const SIDEBAR_HIDDEN_KEY = 'workbench.sidebarHidden';
  *  but this is still `git` on a one-core container shared with the Claude sessions. */
 const STATUS_POLL_MS = 10000;
 
-/** Agent state costs a few small file reads rather than a `git` process, and "is it working right
- *  now" is only worth showing if it keeps up, so it gets its own faster poll. */
-const AGENT_POLL_MS = 3000;
+/** Agent state gets its own poll, separate from git status. It used to run every 3s, which on a
+ *  slow link (plane wifi) is a steady stream of round trips; a push channel would beat both. */
+const AGENT_POLL_MS = 15000;
 
 const [state, setState] = createStore({
   projects: [],
@@ -137,7 +137,6 @@ function watchStatus() {
   const tick = () => {
     if (document.visibilityState !== 'visible') return;
     refreshStatusSoon();
-    refreshAgents().catch(() => {});
   };
   const agentTick = () => {
     if (document.visibilityState === 'visible') refreshAgents().catch(() => {});
@@ -146,7 +145,9 @@ function watchStatus() {
   setInterval(agentTick, AGENT_POLL_MS);
   // A tab left in the background misses ticks, so catch up the moment it comes back.
   document.addEventListener('visibilitychange', tick);
+  document.addEventListener('visibilitychange', agentTick);
   tick();
+  agentTick();
 }
 
 function rememberWorkspace(workspaceId) {
