@@ -1,7 +1,7 @@
 import { FitAddon } from '@xterm/addon-fit';
 import { Terminal } from '@xterm/xterm';
 import '@xterm/xterm/css/xterm.css';
-import { Show, createEffect, createSignal, onCleanup, onMount } from 'solid-js';
+import { Show, createEffect, createSignal, on, onCleanup, onMount } from 'solid-js';
 
 import * as api from '../api';
 import { createLinkSupport } from '../links';
@@ -146,7 +146,9 @@ export function TerminalPane(props) {
       if (disposed || !reconnecting) return;
       let tabs;
       try {
-        tabs = await api.listTabs(state.activeWorkspaceId, { timeoutMs: LIST_TIMEOUT_MS });
+        // Its own workspace, which isn't necessarily the one on screen: open workspaces stay
+        // attached in the background.
+        tabs = await api.listTabs(props.tab.workspace_id, { timeoutMs: LIST_TIMEOUT_MS });
       } catch (_) {
         // The server may not be back yet -- or this request went down a pooled connection that
         // died along with the websocket, and would hang there. Either way, try the socket itself:
@@ -395,6 +397,15 @@ export function TerminalPane(props) {
     // So a terminal that arrives already active -- a new workspace, a new tab, the panel a restored
     // layout comes back on -- gets the keyboard here instead, and typing works without a click.
     if (props.panelApi.isActive) autoFocus();
+    // Its workspace stays open in the background while another is shown, where the terminal can't
+    // hold focus. Coming back to the front, the terminal that was active gets the keyboard again.
+    createEffect(
+      on(
+        () => state.activeWorkspaceId === props.tab.workspace_id,
+        (shown) => shown && props.panelApi.isActive && queueMicrotask(autoFocus),
+        { defer: true },
+      ),
+    );
     onCleanup(() => {
       sizeSub.dispose();
       visSub.dispose();

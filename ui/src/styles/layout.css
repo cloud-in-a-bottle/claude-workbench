@@ -57,7 +57,11 @@ body { display: flex; flex-direction: row; }
 
 #sp-split { flex: 1; display: flex; min-height: 0; }
 #sp-left { flex: 1 1 auto; min-width: 0; display: flex; flex-direction: column; }
-#terminal-layout { flex: 1; min-height: 0; }
+#terminal-layout { flex: 1; min-height: 0; position: relative; }
+/* One per workspace open in the page, all the same size; see TerminalLayout. Hidden ones keep
+   their layout (so their terminals keep their size) and can't take focus or clicks. */
+.wb-workspace-layout { position: absolute; inset: 0; }
+.wb-workspace-layout.wb-background { visibility: hidden; pointer-events: none; }
 
 /* Positioned so the busy overlay covers this terminal rather than the whole layout. */
 .terminal-panel { position: relative; width: 100%; height: 100%; padding: 4px; box-sizing: border-box; }

@@ -1,9 +1,9 @@
 import { DockviewSolid } from '@arminmajerie/dockview-solid';
 import '@arminmajerie/dockview-solid/styles/dockview.css';
-import { Show, createEffect, on, onCleanup, untrack } from 'solid-js';
+import { For, Show, createEffect, on, onCleanup, untrack } from 'solid-js';
 
 import * as api from '../api';
-import { closeTab, editorRequests, newTab, state, takeFocusTab } from '../store';
+import { closeTab, editorRequests, newTab, state, takeFocusTab, workspaceTabs } from '../store';
 import { EditorPane } from './EditorPane';
 import { TerminalPane } from './TerminalPane';
 
@@ -27,46 +27,93 @@ const EDITOR_RENDERER = 'always';
 const editorPanelId = (workspaceId) => EDITOR_PREFIX + workspaceId;
 const isEditorPanel = (panelId) => panelId.startsWith(EDITOR_PREFIX);
 
-/** The terminal area: a dockview layout whose panels are the workspace's terminals.
+/** The terminal area: one layout per workspace open in the page, stacked on top of each other,
+ *  with only the active one showing.
+ *
+ *  The others stay mounted, terminals attached, so switching back to one is instant rather than a
+ *  reconnect and a replay of every terminal's output. They're hidden with `visibility` rather than
+ *  `display` so they keep their size: a terminal measured at 0x0 would shrink its program to two
+ *  columns, and claude would redraw for that. Rendered in the order they were opened, never moved:
+ *  moving an editor's <iframe> in the document reloads it. */
+export function TerminalLayout() {
+  // Keys of a store object come back in insertion order, which is opening order.
+  const open = () => Object.keys(state.workspaceTabs);
+  return (
+    <div id="terminal-layout">
+      <For each={open()}>
+        {(workspaceId) => (
+          <div
+            class="wb-workspace-layout"
+            classList={{ 'wb-background': workspaceId !== state.activeWorkspaceId }}
+          >
+            <WorkspaceLayout workspaceId={workspaceId} />
+          </div>
+        )}
+      </For>
+      <Show when={!(state.activeWorkspaceId in state.workspaceTabs)}>
+        <div class="wb-workspace-layout dv-watermark">
+          <Show when={!state.activeWorkspaceId}>
+            <p>
+              {state.projects.length
+                ? 'Pick a workspace on the left, or create one with + next to a project.'
+                : 'Add a project with + in the sidebar, then create a workspace in it.'}
+            </p>
+          </Show>
+        </div>
+      </Show>
+    </div>
+  );
+}
+
+/** One workspace's dockview layout, whose panels are its terminals (and its editor).
  *
  *  The store stays the source of truth for *which* terminals exist; dockview owns where they sit.
  *  An effect reconciles the two, and the arrangement is saved per workspace so a reload comes back
  *  to the same split. */
-export function TerminalLayout() {
+function WorkspaceLayout(props) {
+  const workspaceId = props.workspaceId;
+  const isActive = () => state.activeWorkspaceId === workspaceId;
   let dock;
-  let mountedWorkspace = '';
   let saveTimer;
+  // The layout as of its last change, waiting out the debounce to be written. Serialised when it
+  // changes rather than when the timer fires, so it can still be written once dockview is gone.
+  let pendingLayout = null;
   // Set while a workspace's saved layout is still waiting on its terminals to arrive. The
   // reconcile below sweeps panels the store doesn't know about, so restoring before the tabs land
   // would throw the layout straight back away.
-  let awaitingTabs = false;
+  let awaitingTabs = true;
   // Set just before a new tab reaches the store, so the reconcile that follows can put its panel
   // in the group whose + was clicked rather than the default one.
   let pendingPlacement = null;
   // Panels we remove ourselves; their terminals are already gone, so closing must not kill twice.
   const removingSilently = new Set();
 
-  function writeLayout(workspaceId) {
+  function writeLayout() {
+    clearTimeout(saveTimer);
+    if (pendingLayout === null) return;
     try {
-      localStorage.setItem(layoutKey(workspaceId), JSON.stringify(dock.toJSON()));
+      localStorage.setItem(layoutKey(workspaceId), pendingLayout);
     } catch (_) {
       /* a layout is not worth failing over */
     }
+    pendingLayout = null;
   }
 
   function saveLayout() {
-    // Mid-switch the dock is empty or half-built; saving then would write that over the layout we
-    // are about to restore.
-    if (!dock || !mountedWorkspace || awaitingTabs) return;
-    // Pinned now rather than read when the timer fires, so a switch in between can't file these
-    // changes under the workspace that comes next.
-    const workspaceId = mountedWorkspace;
+    // Before its terminals arrive the dock is empty; saving then would write that over the layout
+    // we are about to restore.
+    if (!dock || awaitingTabs) return;
+    try {
+      pendingLayout = JSON.stringify(dock.toJSON());
+    } catch (_) {
+      return;
+    }
     clearTimeout(saveTimer);
-    saveTimer = setTimeout(() => writeLayout(workspaceId), SAVE_DEBOUNCE_MS);
+    saveTimer = setTimeout(writeLayout, SAVE_DEBOUNCE_MS);
   }
 
   /** Put back the arrangement this workspace was left in, if it has one. */
-  function restoreLayout(workspaceId) {
+  function restoreLayout() {
     try {
       const saved = localStorage.getItem(layoutKey(workspaceId));
       if (saved) dock.fromJSON(JSON.parse(saved));
@@ -93,26 +140,14 @@ export function TerminalLayout() {
 
   /** Bring dockview's panels in line with the workspace's tabs. */
   function reconcile() {
-    const workspaceId = state.activeWorkspaceId;
-    const tabs = state.tabs.map((t) => ({ id: t.id, label: t.label }));
+    const tabs = workspaceTabs(workspaceId).map((t) => ({ id: t.id, label: t.label }));
     if (!dock) return;
 
-    if (workspaceId !== mountedWorkspace) {
-      // Whatever the outgoing workspace was left looking like, write it now: the teardown below
-      // empties the dock, so a debounced save would have nothing left to record.
-      clearTimeout(saveTimer);
-      if (mountedWorkspace && !awaitingTabs) writeLayout(mountedWorkspace);
-      for (const panel of [...dock.panels]) removeSilently(panel);
-      mountedWorkspace = workspaceId;
-      awaitingTabs = Boolean(workspaceId);
-    }
-
     if (awaitingTabs) {
-      // The store empties `tabs` the moment a workspace is picked and fills them in when the
-      // server answers. Lay nothing out until then.
+      // A workspace with no terminals yet is about to be given one. Lay nothing out until then.
       if (tabs.length === 0) return;
       awaitingTabs = false;
-      restoreLayout(workspaceId);
+      restoreLayout();
     }
 
     // Panels for terminals that are gone — killed elsewhere, or not restored after a restart.
@@ -139,7 +174,7 @@ export function TerminalLayout() {
 
     // A deep link (?tab=) or a reattached terminal asks to be brought to the front. Untracked:
     // taking it clears it, and this effect has no business re-running over that.
-    const focusId = untrack(takeFocusTab);
+    const focusId = untrack(() => takeFocusTab(tabs));
     if (focusId) dock.getPanel(focusId)?.api.setActive();
   }
 
@@ -147,13 +182,12 @@ export function TerminalLayout() {
   function addTerminal(group) {
     return newTab((created) => {
       if (group) pendingPlacement = { tabId: created.id, group };
-    });
+    }, workspaceId);
   }
 
   /** Show this workspace's editor, bringing the existing panel forward if it's already open. */
   function addEditor() {
-    const workspaceId = state.activeWorkspaceId;
-    if (!dock || !workspaceId) return;
+    if (!dock) return;
     const existing = dock.getPanel(editorPanelId(workspaceId));
     if (existing) {
       existing.api.setActive();
@@ -173,6 +207,9 @@ export function TerminalLayout() {
     event.api.onDidLayoutChange(saveLayout);
     event.api.onDidRemovePanel((panel) => {
       if (removingSilently.delete(panel.id)) return;
+      // The workspace itself is leaving the page -- pushed out of the open ones, archived, deleted
+      // -- and dockview is being torn down with it. Its terminals carry on without a page.
+      if (!(workspaceId in state.workspaceTabs)) return;
       if (isEditorPanel(panel.id)) {
         // Closing the panel is as explicit as it gets, so the instance goes too rather than
         // holding its memory until the idle timeout notices. Reopening takes a few seconds and
@@ -190,10 +227,11 @@ export function TerminalLayout() {
 
   createEffect(reconcile);
   // defer: the count is non-zero only once something has actually asked.
-  createEffect(on(editorRequests, addEditor, { defer: true }));
+  // Only the layout on screen answers: the top bar's request is for the workspace it shows.
+  createEffect(on(editorRequests, () => isActive() && addEditor(), { defer: true }));
 
   onCleanup(() => {
-    clearTimeout(saveTimer);
+    writeLayout();
     // DockviewSolid disposes the dockview in its own cleanup; doing it here too would tear down
     // the panel portals twice.
     dock = undefined;
@@ -201,7 +239,7 @@ export function TerminalLayout() {
 
   function TerminalPanel(panelProps) {
     const tabId = panelProps.params.tabId;
-    const tab = () => state.tabs.find((t) => t.id === tabId);
+    const tab = () => workspaceTabs(workspaceId).find((t) => t.id === tabId);
     return (
       <Show when={tab()}>
         <TerminalPane tab={tab()} panelApi={panelProps.api} />
@@ -226,39 +264,26 @@ export function TerminalLayout() {
   function Watermark() {
     return (
       <div class="dv-watermark">
-        <Show
-          when={state.activeWorkspaceId}
-          fallback={
-            <p>
-              {state.projects.length
-                ? 'Pick a workspace on the left, or create one with + next to a project.'
-                : 'Add a project with + in the sidebar, then create a workspace in it.'}
-            </p>
-          }
-        >
-          <p>
-            Nothing open here.{' '}
-            <button class="wb-btn" type="button" onClick={() => addTerminal()}>
-              Open a terminal
-            </button>{' '}
-            <button class="wb-btn" type="button" onClick={addEditor}>
-              Open the editor
-            </button>
-          </p>
-        </Show>
+        <p>
+          Nothing open here.{' '}
+          <button class="wb-btn" type="button" onClick={() => addTerminal()}>
+            Open a terminal
+          </button>{' '}
+          <button class="wb-btn" type="button" onClick={addEditor}>
+            Open the editor
+          </button>
+        </p>
       </div>
     );
   }
 
   return (
-    <div id="terminal-layout">
-      <DockviewSolid
-        theme={WORKBENCH_THEME}
-        components={{ terminal: TerminalPanel, editor: EditorPanel }}
-        rightHeaderActionsComponent={GroupActions}
-        watermarkComponent={Watermark}
-        onReady={onReady}
-      />
-    </div>
+    <DockviewSolid
+      theme={WORKBENCH_THEME}
+      components={{ terminal: TerminalPanel, editor: EditorPanel }}
+      rightHeaderActionsComponent={GroupActions}
+      watermarkComponent={Watermark}
+      onReady={onReady}
+    />
   );
 }
