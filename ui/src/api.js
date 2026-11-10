@@ -14,11 +14,12 @@ async function result(resp, method, url) {
   return data;
 }
 
-async function request(method, url, body) {
+async function request(method, url, body, { timeoutMs } = {}) {
   const resp = await fetch(url, {
     method,
     headers: body === undefined ? undefined : { 'Content-Type': 'application/json' },
     body: body === undefined ? undefined : JSON.stringify(body),
+    signal: timeoutMs ? AbortSignal.timeout(timeoutMs) : undefined,
   });
   return result(resp, method, url);
 }
@@ -52,8 +53,8 @@ export const listWorkspaceStatus = () => request('GET', '/api/workspaces/status'
 /** What Claude is doing in each workspace, as its own sessions reported it. */
 export const listWorkspaceAgents = () => request('GET', '/api/workspaces/agents');
 
-export const listTabs = (workspaceId) =>
-  request('GET', `/api/tabs?workspace=${encodeURIComponent(workspaceId)}`);
+export const listTabs = (workspaceId, opts) =>
+  request('GET', `/api/tabs?workspace=${encodeURIComponent(workspaceId)}`, undefined, opts);
 export const createTab = (workspaceId, label) => request('POST', '/api/tabs', { workspace_id: workspaceId, label });
 export const deleteTab = (tabId) => request('DELETE', `/api/tabs/${encodeURIComponent(tabId)}`);
 export const kickTab = (tabId) => request('POST', `/api/tabs/${encodeURIComponent(tabId)}/kick`);

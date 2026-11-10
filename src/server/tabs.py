@@ -40,6 +40,11 @@ from server.tab_store import save_tabs
 _BUF_MAX = 2 * 1024 * 1024
 _REPLAY_CHUNK = 64 * 1024
 _KICKED_MSG = b"\x01" + json.dumps({"type": "kicked"}).encode()
+_PONG_MSG = b"\x01" + json.dumps({"type": "pong"}).encode()
+# A client that sends its `client` id also pings every few seconds (TerminalPane.jsx), so hearing
+# nothing from it for this long means the connection is dead even if TCP hasn't noticed -- and on a
+# flaky network TCP can take a quarter of an hour to. Ending it frees the tab for the reconnect.
+_CLIENT_SILENCE_TIMEOUT = 45.0
 # How far under a tab's foreground process group to look for the program it is running.
 # Deep enough for the login shell -> claude -> a tool call it spawned, shallow enough to
 # stay cheap on a list every open browser polls.
@@ -188,6 +193,9 @@ class ServerTab:
     input_buf: bytearray = attr.Factory(bytearray)
     client_queue: asyncio.Queue[bytes | None] | None = None
     kick_event: asyncio.Event | None = None
+    # The browser pane attached right now, as it named itself. The same pane reconnecting after its
+    # network dropped takes the tab back from its own dead connection instead of being told busy.
+    client_id: str = ""
 
 
 def _prepare_tab_process() -> None:
@@ -220,7 +228,11 @@ def _queue_for_client(tab: ServerTab, item: bytes | None) -> None:
     try:
         tab.client_queue.put_nowait(item)
     except asyncio.QueueFull:
-        pass
+        # The client has fallen too far behind to keep up -- a slow link, usually. Dropping output
+        # here used to leave its screen garbled for good, since the terminal never saw what it
+        # missed. Cutting it off instead makes it reconnect and start clean from the replay buffer.
+        if tab.kick_event is not None:
+            tab.kick_event.set()
 
 
 def start_tab_reader(tab: ServerTab) -> None:
@@ -613,6 +625,14 @@ async def handle_terminal_ws(socket: WebSocket[Any, Any, Any]) -> None:
     tab = _tabs.get(tab_id) if tab_id else None
     if tab is None:
         return
+    client_id = socket.query_params.get("client") or ""
+    if tab.lock.locked() and client_id and client_id == tab.client_id:
+        # This same pane is still attached as far as we know: its old connection died without a
+        # close reaching us. That one is dead, so take the tab back from it.
+        try:
+            await kick_tab(tab, notify=False)
+        except TimeoutError:
+            pass
     if tab.lock.locked():
         await socket.send_data(b"\x01" + json.dumps({"type": "busy"}).encode(), mode="binary")
         return
@@ -624,6 +644,7 @@ async def handle_terminal_ws(socket: WebSocket[Any, Any, Any]) -> None:
     # connection was then told the tab was open elsewhere, and a kick timed out waiting for it.
     try:
         tab.connected = True
+        tab.client_id = client_id
         kick = asyncio.Event()
         tab.kick_event = kick
         q: asyncio.Queue[bytes | None] = asyncio.Queue(maxsize=512)
@@ -665,14 +686,19 @@ async def handle_terminal_ws(socket: WebSocket[Any, Any, Any]) -> None:
                     if chunk is _KICKED_MSG:
                         await socket.send_data(_KICKED_MSG, mode="binary")
                         break
+                    if chunk is _PONG_MSG:
+                        await socket.send_data(_PONG_MSG, mode="binary")
+                        continue
                     await socket.send_data(b"\x00" + chunk, mode="binary")
             except Exception:
                 pass
 
         async def ws_to_pty() -> None:
             try:
+                # Only a client that names itself is known to ping, so only it can be timed out.
+                silence = _CLIENT_SILENCE_TIMEOUT if client_id else None
                 while True:
-                    msg = await socket.receive_data(mode="binary")
+                    msg = await asyncio.wait_for(socket.receive_data(mode="binary"), timeout=silence)
                     if isinstance(msg, bytes | bytearray) and len(msg) > 0:
                         kind = msg[0]
                         payload = bytes(msg[1:])
@@ -682,6 +708,13 @@ async def handle_terminal_ws(socket: WebSocket[Any, Any, Any]) -> None:
                             ctrl = json.loads(payload)
                             if ctrl.get("type") == "resize":
                                 set_winsize(tab.master_fd, int(ctrl["rows"]), int(ctrl["cols"]))
+                            elif ctrl.get("type") == "ping":
+                                # Through the queue, behind any output: if that is stuck, so is the
+                                # pong, which is exactly what the client needs to find out.
+                                try:
+                                    q.put_nowait(_PONG_MSG)
+                                except asyncio.QueueFull:
+                                    pass
                     elif isinstance(msg, str):
                         write_to_tab(tab, msg.encode())
             except Exception:
@@ -702,22 +735,25 @@ async def handle_terminal_ws(socket: WebSocket[Any, Any, Any]) -> None:
     finally:
         tab.client_queue = None
         tab.kick_event = None
+        tab.client_id = ""
         tab.connected = False
         tab.lock.release()
 
 
-async def kick_tab(tab: ServerTab) -> None:
-    """Disconnect the current client and wait until the lock is free."""
+async def kick_tab(tab: ServerTab, *, notify: bool = True) -> None:
+    """Disconnect the current client and wait until the lock is free.
+
+    `notify` tells the client it was taken over; there's no point when it is a dead connection.
+    """
     if not tab.lock.locked():
         return
-    # Notify the connected client before disconnecting it.
-    if tab.client_queue is not None:
+    if notify and tab.client_queue is not None:
         try:
             tab.client_queue.put_nowait(_KICKED_MSG)
         except asyncio.QueueFull:
             pass
-    # Yield so pty_to_ws can send the notification before we set the kick event.
-    await asyncio.sleep(0.05)
+        # Yield so pty_to_ws can send the notification before we set the kick event.
+        await asyncio.sleep(0.05)
     if tab.kick_event is not None:
         tab.kick_event.set()
     await asyncio.wait_for(tab.lock.acquire(), timeout=5.0)
