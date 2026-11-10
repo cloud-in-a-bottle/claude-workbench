@@ -12,6 +12,18 @@ import { xtermTheme } from '../themes';
 import { attachTouchScroll } from '../touchScroll';
 
 const RECONNECT_POLL_MS = 2000;
+// A connection on a flaky network (plane wifi, a phone between towers) usually dies without
+// closing: packets just stop, the browser keeps reporting it open, keystrokes queue up behind it
+// and nothing ever reconnects. So the pane pings, and treats silence as a dead connection. The
+// server times out its end on the same silence (_CLIENT_SILENCE_TIMEOUT in tabs.py), a bit later.
+const HEARTBEAT_MS = 10000;
+const DEAD_AFTER_MS = 25000;
+// After the network comes back or the page is shown again, how long a ping gets to be answered.
+const PROBE_MS = 4000;
+// A handshake still hanging after this long isn't going to finish.
+const CONNECT_TIMEOUT_MS = 10000;
+// How long the reconnect waits to hear whether its tab still exists.
+const LIST_TIMEOUT_MS = 5000;
 // xterm keeps 1000 lines by default, which a long claude session scrolls past in minutes — the
 // scrollbar then stops well short of where the conversation actually started. Costs roughly
 // cols * 12 bytes per line held, so this is a few MB per terminal once one is really full.
@@ -49,9 +61,23 @@ function withCtrl(data) {
   return code >= 0x40 && code <= 0x5f ? String.fromCharCode(code & 0x1f) : data;
 }
 
-function wsUrl(tabId) {
+function wsUrl(tabId, clientId) {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
-  return `${proto}://${location.host}/terminal/ws?tab=${encodeURIComponent(tabId)}`;
+  const query = `tab=${encodeURIComponent(tabId)}&client=${encodeURIComponent(clientId)}`;
+  return `${proto}://${location.host}/terminal/ws?${query}`;
+}
+
+function newClientId() {
+  return crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+/** A control message (resize, ping) as the server reads it: 0x01 then JSON. */
+function controlFrame(msg) {
+  const json = new TextEncoder().encode(JSON.stringify(msg));
+  const buf = new Uint8Array(1 + json.length);
+  buf[0] = 0x01;
+  buf.set(json, 1);
+  return buf.buffer;
 }
 
 /** The image in a paste, if it carries one. A screenshot off the system clipboard arrives as an
@@ -84,6 +110,15 @@ export function TerminalPane(props) {
   let reconnecting = false;
   let disposed = false;
   let lastDimensions = { cols: 80, rows: 24 };
+  // Who this pane is to the server, so a reconnect after a silent drop can take the tab back from
+  // its own dead connection rather than being told the tab is open somewhere else.
+  const clientId = newClientId();
+  let everConnected = false;
+  let lastHeard = 0;
+  let connectTimer = null;
+  let probeTimer = null;
+  let pollTimer = null;
+  const openSockets = new WeakSet();
   const [busy, setBusy] = createSignal('');
   const [notice, setNotice] = createSignal('');
   const [linkHint, setLinkHint] = createSignal('');
@@ -94,11 +129,7 @@ export function TerminalPane(props) {
     const proposed = fit.proposeDimensions();
     if (proposed) lastDimensions = proposed;
     const { cols, rows } = proposed || lastDimensions;
-    const json = new TextEncoder().encode(JSON.stringify({ type: 'resize', cols, rows }));
-    const buf = new Uint8Array(1 + json.length);
-    buf[0] = 0x01;
-    buf.set(json, 1);
-    socket.send(buf.buffer);
+    socket.send(controlFrame({ type: 'resize', cols, rows }));
   }
 
   function refit() {
@@ -110,34 +141,105 @@ export function TerminalPane(props) {
 
   /** After a dropped connection, work out whether the terminal is still there before reattaching. */
   function pollReconnect() {
-    setTimeout(async () => {
+    clearTimeout(pollTimer);
+    pollTimer = setTimeout(async () => {
       if (disposed || !reconnecting) return;
+      let tabs;
       try {
-        const tabs = await api.listTabs(state.activeWorkspaceId);
-        if (tabs.some((t) => t.id === props.tab.id)) connect();
-        else forgetTab(props.tab.id);
+        tabs = await api.listTabs(state.activeWorkspaceId, { timeoutMs: LIST_TIMEOUT_MS });
       } catch (_) {
-        pollReconnect(); // server not back yet
+        // The server may not be back yet -- or this request went down a pooled connection that
+        // died along with the websocket, and would hang there. Either way, try the socket itself:
+        // it gets a fresh connection, and if the tab really is gone it fails and lands back here.
       }
+      if (disposed || !reconnecting) return;
+      if (tabs && !tabs.some((t) => t.id === props.tab.id)) forgetTab(props.tab.id);
+      else connect();
     }, RECONNECT_POLL_MS);
+  }
+
+  /** The connection is gone, whether it said so or we gave up on it: start getting it back. */
+  function lost(ws) {
+    if (socket !== ws || disposed) return;
+    const wasOpen = openSockets.has(ws);
+    socket = null;
+    clearTimeout(connectTimer);
+    clearTimeout(probeTimer);
+    probeTimer = null;
+    ws.onopen = ws.onmessage = ws.onclose = null;
+    // A dead connection's close handshake can take minutes to give up, and its onclose with it.
+    try {
+      ws.close();
+    } catch (_) {}
+    if (busy() || reconnecting) return;
+    reconnecting = true;
+    // Once per outage, not once per failed attempt at ending it.
+    if (wasOpen) term.write('\r\n\x1b[90m[reconnecting...]\x1b[0m\r\n');
+    pollReconnect();
+  }
+
+  function ping() {
+    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+    try {
+      socket.send(controlFrame({ type: 'ping' }));
+    } catch (_) {}
+  }
+
+  /** Every few seconds: give up on a connection that has gone quiet, otherwise prod it. */
+  function heartbeat() {
+    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+    if (Date.now() - lastHeard > DEAD_AFTER_MS) lost(socket);
+    else ping();
+  }
+
+  /** Something suggests the connection may have died -- the network changed, or the page was
+   *  asleep -- so check now rather than waiting out the heartbeat. */
+  function probe() {
+    if (disposed) return;
+    if (reconnecting) {
+      connect(); // skip the rest of the poll wait; connect() checks the tab still exists on failure
+      return;
+    }
+    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+    const ws = socket;
+    const asked = Date.now();
+    ping();
+    clearTimeout(probeTimer);
+    probeTimer = setTimeout(() => {
+      probeTimer = null;
+      if (socket === ws && lastHeard < asked) lost(ws);
+    }, PROBE_MS);
   }
 
   function connect() {
     if (disposed) return;
+    clearTimeout(pollTimer);
     reconnecting = false;
     setBusy('');
     if (socket && (socket.readyState === WebSocket.OPEN || socket.readyState === WebSocket.CONNECTING)) return;
 
-    const ws = new WebSocket(wsUrl(props.tab.id));
+    const ws = new WebSocket(wsUrl(props.tab.id, clientId));
     ws.binaryType = 'arraybuffer';
     socket = ws;
+    clearTimeout(connectTimer);
+    connectTimer = setTimeout(() => {
+      if (socket === ws && ws.readyState === WebSocket.CONNECTING) lost(ws);
+    }, CONNECT_TIMEOUT_MS);
 
     ws.onopen = () => {
+      openSockets.add(ws);
+      clearTimeout(connectTimer);
+      lastHeard = Date.now();
+      // The server replays the tab's whole output buffer on every attach. Written on top of what
+      // the terminal already shows, a reconnect would repeat the session in the scrollback.
+      if (everConnected) term.reset();
+      everConnected = true;
       // Always send: a hidden panel reuses the dimensions it last knew about.
       if (props.panelApi.isVisible) fit.fit();
       sendResize();
     };
     ws.onmessage = (ev) => {
+      lastHeard = Date.now();
       if (!(ev.data instanceof ArrayBuffer)) {
         term.write(ev.data);
         return;
@@ -157,14 +259,7 @@ export function TerminalPane(props) {
         else if (msg.type === 'exit') term.write('\r\n\x1b[90m[process exited]\x1b[0m\r\n');
       } catch (_) {}
     };
-    ws.onclose = () => {
-      if (socket !== ws || disposed) return;
-      socket = null;
-      if (busy() || reconnecting) return;
-      reconnecting = true;
-      term.write('\r\n\x1b[90m[reconnecting...]\x1b[0m\r\n');
-      pollReconnect();
-    };
+    ws.onclose = () => lost(ws);
   }
 
   function send(data) {
@@ -174,6 +269,9 @@ export function TerminalPane(props) {
     buf[0] = 0x00;
     buf.set(enc, 1);
     socket.send(buf.buffer);
+    // Typing into a dead connection is when anyone notices one, so check on it then too, rather
+    // than leaving the keystrokes to vanish until the heartbeat gives up on it.
+    if (!probeTimer) probe();
   }
 
   /** How the phone's extra-keys bar reaches this terminal while it has the keyboard. */
@@ -267,6 +365,15 @@ export function TerminalPane(props) {
       send(data);
     });
     connect();
+    const heartbeatTimer = setInterval(heartbeat, HEARTBEAT_MS);
+    const onVisible = () => document.visibilityState === 'visible' && probe();
+    window.addEventListener('online', probe);
+    document.addEventListener('visibilitychange', onVisible);
+    onCleanup(() => {
+      clearInterval(heartbeatTimer);
+      window.removeEventListener('online', probe);
+      document.removeEventListener('visibilitychange', onVisible);
+    });
 
     host.addEventListener('paste', onPaste, true);
     onCleanup(() => host.removeEventListener('paste', onPaste, true));
@@ -310,6 +417,9 @@ export function TerminalPane(props) {
     disposed = true;
     reconnecting = false;
     clearTimeout(noticeTimer);
+    clearTimeout(connectTimer);
+    clearTimeout(probeTimer);
+    clearTimeout(pollTimer);
     if (socket) {
       socket.onclose = null;
       try {

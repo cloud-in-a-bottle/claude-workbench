@@ -471,3 +471,117 @@ def test_a_kick_cuts_off_a_client_that_stalled_mid_replay(monkeypatch: pytest.Mo
         assert not tab.lock.locked()
     finally:
         os.close(tab.master_fd)
+
+
+class _SilentClientSocket(_FakeTerminalSocket):
+    """A pane that named itself (and so promised to ping), then went silent: the network died
+    under it without a close ever arriving. Its sends go nowhere."""
+
+    def __init__(self, tab_id: str, client_id: str) -> None:
+        async def swallow(data: bytes) -> None:
+            pass
+
+        super().__init__(tab_id, swallow)
+        self.query_params = {"tab": tab_id, "client": client_id}
+
+
+def test_a_silent_client_is_cut_off_so_the_tab_is_free_again(monkeypatch: pytest.MonkeyPatch) -> None:
+    """On plane wifi a connection dies without closing. Without a timeout the dead one held the tab
+    until TCP gave up, minutes later, and every reconnect meanwhile was told the tab was busy."""
+    monkeypatch.setattr(tabs_module, "set_winsize", lambda *a: None)
+    monkeypatch.setattr(tabs_module, "_CLIENT_SILENCE_TIMEOUT", 0.1)
+    tab = _tab_with_output()
+    try:
+        asyncio.run(asyncio.wait_for(tabs_module.handle_terminal_ws(_SilentClientSocket(tab.id, "pane-1")), timeout=2))  # type: ignore[arg-type]
+        assert not tab.lock.locked()
+        assert tab.client_id == ""
+    finally:
+        os.close(tab.master_fd)
+
+
+def test_the_same_pane_reconnecting_takes_its_tab_back(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Before the server notices the old connection is dead, the pane it belonged to is back: it
+    gets the tab, rather than being told the tab is open in another browser."""
+    monkeypatch.setattr(tabs_module, "set_winsize", lambda *a: None)
+    tab = _tab_with_output()
+    sent: list[bytes] = []
+
+    async def record(data: bytes) -> None:
+        sent.append(data)
+
+    async def drop_then_return() -> None:
+        old = asyncio.create_task(tabs_module.handle_terminal_ws(_SilentClientSocket(tab.id, "pane-1")))  # type: ignore[arg-type]
+        while not tab.connected:
+            await asyncio.sleep(0.01)
+        new = _FakeTerminalSocket(tab.id, record)
+        new.query_params = {"tab": tab.id, "client": "pane-1"}
+        task = asyncio.create_task(tabs_module.handle_terminal_ws(new))  # type: ignore[arg-type]
+        await asyncio.wait_for(old, timeout=2)
+        while not sent:
+            await asyncio.sleep(0.01)
+        assert tab.connected
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+    try:
+        asyncio.run(drop_then_return())
+        assert not any(b'"busy"' in d or b'"kicked"' in d for d in sent)
+    finally:
+        os.close(tab.master_fd)
+
+
+def test_another_pane_is_still_told_the_tab_is_busy(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(tabs_module, "set_winsize", lambda *a: None)
+    tab = _tab_with_output()
+    sent: list[bytes] = []
+
+    async def record(data: bytes) -> None:
+        sent.append(data)
+
+    async def two_panes() -> None:
+        first = asyncio.create_task(tabs_module.handle_terminal_ws(_SilentClientSocket(tab.id, "pane-1")))  # type: ignore[arg-type]
+        while not tab.connected:
+            await asyncio.sleep(0.01)
+        other = _FakeTerminalSocket(tab.id, record)
+        other.query_params = {"tab": tab.id, "client": "pane-2"}
+        await asyncio.wait_for(tabs_module.handle_terminal_ws(other), timeout=2)  # type: ignore[arg-type]
+        assert tab.client_id == "pane-1"
+        first.cancel()
+        await asyncio.gather(first, return_exceptions=True)
+
+    try:
+        asyncio.run(two_panes())
+        assert any(b'"busy"' in d for d in sent)
+    finally:
+        os.close(tab.master_fd)
+
+
+def test_a_ping_is_answered(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(tabs_module, "set_winsize", lambda *a: None)
+    tab = _tab_with_output()
+    sent: list[bytes] = []
+
+    async def record(data: bytes) -> None:
+        sent.append(data)
+
+    class PingingSocket(_FakeTerminalSocket):
+        def __init__(self) -> None:
+            super().__init__(tab.id, record)
+            self._msgs = [b"\x01" + json.dumps({"type": "ping"}).encode()]
+
+        async def receive_data(self, mode: str = "text") -> bytes:
+            if not self._first and self._msgs:
+                return self._msgs.pop()
+            return await super().receive_data(mode)
+
+    async def ping_and_wait() -> None:
+        task = asyncio.create_task(tabs_module.handle_terminal_ws(PingingSocket()))  # type: ignore[arg-type]
+        while tabs_module._PONG_MSG not in sent:
+            await asyncio.sleep(0.01)
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+
+    try:
+        asyncio.run(asyncio.wait_for(ping_and_wait(), timeout=2))
+    finally:
+        os.close(tab.master_fd)
