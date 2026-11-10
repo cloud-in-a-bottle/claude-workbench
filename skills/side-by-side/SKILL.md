@@ -33,7 +33,7 @@ Pick a port nothing else is using (`ss -ltn` lists the busy ones); other workspa
      -d '{"side_panel": true, "side_panel_url": "/absproxy/5173/"}'
    ```
 
-   Open pages pick this up within a few seconds, with no reload, and the panel un-hides itself. While the server is still starting, the panel shows a page that keeps retrying, so the order of these two steps doesn't matter.
+   Open pages pick this up within about 15 seconds, with no reload, and the panel un-hides itself. While the server is still starting, the panel shows a page that keeps retrying, so the order of these two steps doesn't matter.
 3. Before telling the user it's there, check it actually renders through the proxy, eg `curl -sS http://127.0.0.1:${PORT:-5000}/absproxy/5173/`. A 404 from the dev server usually means the base path doesn't match the URL.
 
 `side_panel_url` also takes an `https://` URL (eg another openhost app), or `null` for the panel's home page. To turn the panel off, POST `{"side_panel": false}`. `GET` the same URL to read the current settings.

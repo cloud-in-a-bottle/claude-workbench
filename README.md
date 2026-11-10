@@ -280,7 +280,7 @@ POST /api/ui/settings   { "side_panel": true, "side_panel_url": "/absproxy/5173/
 GET  /api/ui/settings   -> { "side_panel": true, "theme": "...", "side_panel_url": "/absproxy/5173/" }
 ```
 
-Both settings are stored in `$HOME/.workbench/ui.json`, so they survive container rebuilds, and an open page polls them every few seconds — no reload needed. Changing `side_panel_url` from outside shows the panel even if it was hidden; typing in the panel's URL bar saves there too, so the two never fight. Drag the divider to resize, or double-click it to reset; it's focusable, with arrow keys (Shift for larger steps). Width and visibility are per browser, in `localStorage`, and **◻ panel** in the top bar brings a hidden pane back.
+Both settings are stored in `$HOME/.workbench/ui.json`, so they survive container rebuilds, and an open page polls them every 15 seconds — no reload needed. Changing `side_panel_url` from outside shows the panel even if it was hidden; typing in the panel's URL bar saves there too, so the two never fight. Drag the divider to resize, or double-click it to reset; it's focusable, with arrow keys (Shift for larger steps). Width and visibility are per browser, in `localStorage`, and **◻ panel** in the top bar brings a hidden pane back.
 
 #### Previewing a dev server
 
