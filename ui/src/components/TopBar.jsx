@@ -3,7 +3,7 @@ import { Show, createSignal } from 'solid-js';
 import * as api from '../api';
 import { hidden as panelHidden, setHidden as setPanelHidden, enabled as sidePanelEnabled } from '../sidePanel';
 import { isMobile, mobilePanelOpen, setDrawerOpen, setMobilePanelOpen } from '../mobile';
-import { activeWorkspace, adoptTab, newTab, requestEditor, sidebarHidden, state, toggleSidebar } from '../store';
+import { activeTabs, activeWorkspace, adoptTab, newTab, requestEditor, sidebarHidden, state, toggleSidebar } from '../store';
 import { Menu } from './Menu';
 import { ThemePicker } from './ThemePicker';
 
@@ -15,7 +15,7 @@ export function TopBar() {
    *  browser without being killed, or one restored after a restart. */
   async function openTerminalMenu(anchor) {
     const detached = (await api.listTabs(state.activeWorkspaceId)).filter(
-      (t) => !state.tabs.some((open) => open.id === t.id),
+      (t) => !activeTabs().some((open) => open.id === t.id),
     );
     if (detached.length === 0) {
       newTab();
