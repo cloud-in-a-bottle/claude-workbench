@@ -184,6 +184,14 @@ def test_wheel_acceleration_defaults_off_but_the_user_wins(tmp_path: Path) -> No
     assert _install(tmp_path)["wheelScrollAccelerationEnabled"] is True
 
 
+def test_fullscreen_renderer_defaults_on_but_the_user_wins(tmp_path: Path) -> None:
+    assert _install(tmp_path)["tui"] == "fullscreen"
+
+    path = tmp_path / ".claude" / "settings.json"
+    path.write_text(json.dumps({"tui": "default"}))
+    assert _install(tmp_path)["tui"] == "default"
+
+
 def test_installing_hooks_over_a_broken_settings_file(tmp_path: Path) -> None:
     """Better to write a usable file than to leave Claude Code with an unreadable one."""
     path = tmp_path / ".claude" / "settings.json"

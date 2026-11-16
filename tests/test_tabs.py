@@ -352,36 +352,40 @@ def test_a_long_replay_is_split_into_frames_that_reassemble_exactly() -> None:
     assert b"".join(frames) == buf
 
 
-def test_every_terminal_runs_claude_on_the_classic_renderer(workbench_home: Path) -> None:
-    """The fullscreen renderer keeps its scrollback in the alternate screen, out of the browser's reach.
+def test_no_terminal_forces_claude_onto_the_classic_renderer(
+    workbench_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN outranks the `tui` setting the workbench defaults to fullscreen.
 
     Asserted on a real spawned tab rather than on the env dict, because what matters is what a
-    process started by a tab actually inherits.
+    process started by a tab actually inherits. The workbench's own environment is cleared of it
+    first: a test run from inside an older workbench's terminal would otherwise pass it down.
     """
+    monkeypatch.delenv("CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN", raising=False)
 
     async def spawn_and_read() -> str:
         tab = await tabs_module.create_server_tab(
-            command=["bash", "-c", "printenv CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN"],
+            command=["bash", "-c", 'echo "[${CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN-unset}]"'],
             cwd=str(workbench_home),
             label="t",
         )
         deadline = time.monotonic() + 5
-        while time.monotonic() < deadline and not tab.output_buf:
+        while time.monotonic() < deadline and b"]" not in tab.output_buf:
             await asyncio.sleep(0.05)
         # Killed inside the loop for the same reason as the process-group test above.
         tabs_module.kill_tab(tab)
         return bytes(tab.output_buf).decode(errors="replace")
 
-    assert asyncio.run(spawn_and_read()).strip() == "1"
+    assert asyncio.run(spawn_and_read()).strip() == "[unset]"
 
 
 def test_a_caller_can_still_override_the_environment_a_tab_starts_with(workbench_home: Path) -> None:
     async def spawn_and_read() -> str:
         tab = await tabs_module.create_server_tab(
-            command=["bash", "-c", "printenv CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN"],
+            command=["bash", "-c", "printenv COLORTERM"],
             cwd=str(workbench_home),
             label="t",
-            env={"CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN": "caller-wins"},
+            env={"COLORTERM": "caller-wins"},
         )
         deadline = time.monotonic() + 5
         while time.monotonic() < deadline and not tab.output_buf:

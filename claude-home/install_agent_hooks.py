@@ -5,7 +5,7 @@ Only the five events below are written. Everything else in settings.json belongs
 their theme, their permissions, and any hooks of their own on other events -- and is read back and
 preserved rather than replaced, because this file is theirs and this is a guest in it.
 
-It also defaults one setting the user can override: see DEFAULTS.
+It also defaults a few settings the user can override: see DEFAULTS.
 """
 
 import json
@@ -24,12 +24,18 @@ STATES = {
 
 # Settings written only when the user hasn't set them.
 #
+# tui: the fullscreen renderer, so every session gets the same one. Left unset, Claude picks a
+# renderer per session (rollout gates, an upsell dialog), and some tabs came up one way and some
+# the other. Fullscreen keeps its scrollback inside the alternate screen, out of the browser
+# scrollbar's reach, so it scrolls by mouse reports instead: the wheel through ui/src/wheelScroll.js
+# and a finger through ui/src/touchScroll.js.
+#
 # wheelScrollAccelerationEnabled: Claude Code's full-screen view ramps each wheel report up to six
 # lines when reports come in under 40ms apart, which suits a notched mouse wheel in a native
 # terminal. The browser terminal turns a trackpad's travel into one report per line of movement
 # (ui/src/wheelScroll.js), so a fast swipe is a dense stream of reports and the ramp made scrolling
 # grow much faster than the fingers. Off, one report scrolls one line.
-DEFAULTS: dict[str, object] = {"wheelScrollAccelerationEnabled": False}
+DEFAULTS: dict[str, object] = {"tui": "fullscreen", "wheelScrollAccelerationEnabled": False}
 
 HOOK_SCRIPT = Path(__file__).parent / "agent_status_hook.py"
 
