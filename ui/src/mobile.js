@@ -37,6 +37,12 @@ export function sendKey(name) {
   target?.sendKey(name);
 }
 
+/** Paste the browser's clipboard into the terminal with the keyboard. Has to run inside the tap
+ *  that asked for it: reading the clipboard needs a user gesture. */
+export function pasteClipboard() {
+  target?.paste();
+}
+
 /** Size the page to the visual viewport. iOS Safari lays out behind the on-screen keyboard rather
  *  than above it, which would put the bottom of the terminal -- the prompt you are typing into --
  *  and the extra-keys bar out of sight. */

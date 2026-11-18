@@ -280,11 +280,23 @@ export function TerminalPane(props) {
   /** How the phone's extra-keys bar reaches this terminal while it has the keyboard. */
   const keyTarget = {
     sendKey: (name) => send(EXTRA_KEYS[name](term.modes.applicationCursorKeysMode)),
+    paste: () => pasteFromClipboard(),
   };
 
   function copySelection() {
     const selection = term.getSelection();
     if (!selection) return false;
+    writeClipboard(selection);
+    return true;
+  }
+
+  /** A long press on a phone selected `text` (see touchScroll.js). */
+  function copyTouchSelection(text) {
+    writeClipboard(text);
+    flashNotice(`Copied ${text.length} character${text.length === 1 ? '' : 's'}`, 2000);
+  }
+
+  function writeClipboard(selection) {
     navigator.clipboard.writeText(selection).catch(() => {
       const ta = document.createElement('textarea');
       ta.value = selection;
@@ -296,7 +308,6 @@ export function TerminalPane(props) {
       } catch (_) {}
       document.body.removeChild(ta);
     });
-    return true;
   }
 
   function flashNotice(text, clearAfterMs) {
@@ -325,6 +336,45 @@ export function TerminalPane(props) {
     }
   }
 
+  /** The paste key on the phone's extra-keys bar. A phone has no paste shortcut, and the long-press
+   *  menu never opens over the terminal, since touchScroll.js takes every touch for scrolling. So
+   *  the clipboard is read directly. An image goes the same way as a pasted one; text is pasted as
+   *  typed. Only one read is attempted: a second would no longer be inside the user's tap. */
+  async function pasteFromClipboard() {
+    const clip = navigator.clipboard;
+    if (!clip) {
+      flashNotice('This browser does not let pages read the clipboard', 6000);
+      return;
+    }
+    try {
+      if (!clip.read) {
+        const text = await clip.readText();
+        if (text) term.paste(text);
+        return;
+      }
+      const items = await clip.read();
+      for (const item of items) {
+        const type = item.types.find((t) => t.startsWith('image/'));
+        if (type) return pasteImage(await item.getType(type));
+      }
+      for (const item of items) {
+        if (item.types.includes('text/plain')) {
+          const text = await (await item.getType('text/plain')).text();
+          if (text) term.paste(text);
+          return;
+        }
+      }
+      flashNotice('Nothing to paste', 3000);
+    } catch (err) {
+      flashNotice(
+        err.name === 'NotAllowedError'
+          ? 'Clipboard access was denied; allow it in the site settings'
+          : `Couldn't read the clipboard: ${err.message}`,
+        6000,
+      );
+    }
+  }
+
   function onPaste(e) {
     const image = clipboardImage(e.clipboardData);
     if (!image) return; // an ordinary text paste; xterm's own handler has it
@@ -349,13 +399,13 @@ export function TerminalPane(props) {
     term.loadAddon(fit);
     term.loadAddon(links.addon);
     term.open(host);
-    // A tap on a link opens it; anywhere else, it brings up the keyboard.
+    // A tap on a link opens it; anywhere else, it brings up the keyboard. A long press selects.
     const onTap = (x, y) => {
       const uri = links.linkAt(x, y);
       if (uri) links.open(uri);
       else term.focus();
     };
-    onCleanup(attachTouchScroll(host, term, send, onTap));
+    onCleanup(attachTouchScroll(host, term, send, onTap, copyTouchSelection));
     attachWheelScroll(host, term);
     term.attachCustomKeyEventHandler((e) => {
       if (e.type === 'keydown' && e.metaKey && e.key === 'c' && copySelection()) return false;
