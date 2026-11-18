@@ -239,8 +239,26 @@ export function attachTouchScroll(host, term, send, onTap, onCopy) {
     fling = requestAnimationFrame(step);
   }
 
+  /** Chrome on Android fires contextmenu when a finger rests for half a second, however much of the
+   *  touch has had its default prevented. xterm takes that for a right-click: it moves its textarea
+   *  under the finger and focuses it, which raises the keyboard -- at the start of any swipe that
+   *  began with a pause, and under every long-press selection. Swallowed before xterm sees it. A
+   *  real right-click (a mouse, a desktop) still gets through. */
+  let lastTouch = -Infinity;
+  function onContextMenu(e) {
+    if (e.pointerType === 'touch' || tracking || e.timeStamp - lastTouch < 1000) {
+      e.preventDefault();
+      e.stopPropagation();
+    }
+  }
+  const noteTouch = (e) => {
+    lastTouch = e.timeStamp;
+  };
+
   // Capture phase and not passive, so a scroll is claimed before xterm's own handlers see it.
   const opts = { capture: true, passive: false };
+  host.addEventListener('contextmenu', onContextMenu, true);
+  host.addEventListener('touchend', noteTouch, true);
   host.addEventListener('touchstart', onStart, opts);
   host.addEventListener('touchmove', onMove, opts);
   host.addEventListener('touchend', onEnd, opts);
@@ -252,5 +270,7 @@ export function attachTouchScroll(host, term, send, onTap, onCopy) {
     host.removeEventListener('touchmove', onMove, opts);
     host.removeEventListener('touchend', onEnd, opts);
     host.removeEventListener('touchcancel', onEnd, opts);
+    host.removeEventListener('contextmenu', onContextMenu, true);
+    host.removeEventListener('touchend', noteTouch, true);
   };
 }
