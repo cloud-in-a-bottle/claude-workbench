@@ -120,6 +120,17 @@ body.sidebar-hidden #sidebar-toggle { display: flex; }
 .workspace-row.archived:hover { color: var(--fg); }
 
 /* An archive or unarchive that failed. Dismissed by clicking it; the next attempt clears it too. */
+.sidebar-notice {
+  margin: 8px 8px 0;
+  padding: 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  color: var(--muted);
+  font-size: 11px;
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
 .sidebar-error {
   margin: 8px 8px 0;
   padding: 6px 8px;
