@@ -348,13 +348,6 @@ async def create_server_tab(
         # own /doctor asks for COLORTERM. Terminals we mirror (iTerm2, kitty, VS Code) all set it.
         "TERM": "xterm-256color",
         "COLORTERM": "truecolor",
-        # Claude's fullscreen renderer draws into the terminal's alternate screen and keeps its own
-        # virtualised scrollback in there, which the browser's scrollbar can't reach -- so a
-        # fullscreen session looks like a terminal you can't scroll. Claude otherwise picks a
-        # renderer per session (rollout gates, an upsell dialog), so without this some tabs
-        # scrolled and some didn't. Set on every tab, not just Claude ones: a shell tab is a place
-        # someone runs `claude` by hand.
-        "CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN": "1",
     }
     apply_env_overlay(merged_env, env or {})
     proc = subprocess.Popen(  # noqa: S603

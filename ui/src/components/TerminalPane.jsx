@@ -10,6 +10,7 @@ import { filterOsc52Noise, handleOsc52 } from '../osc52';
 import { forgetTab, state, theme } from '../store';
 import { xtermTheme } from '../themes';
 import { attachTouchScroll } from '../touchScroll';
+import { attachWheelScroll } from '../wheelScroll';
 
 const RECONNECT_POLL_MS = 2000;
 // A connection on a flaky network (plane wifi, a phone between towers) usually dies without
@@ -355,6 +356,7 @@ export function TerminalPane(props) {
       else term.focus();
     };
     onCleanup(attachTouchScroll(host, term, send, onTap));
+    attachWheelScroll(host, term);
     term.attachCustomKeyEventHandler((e) => {
       if (e.type === 'keydown' && e.metaKey && e.key === 'c' && copySelection()) return false;
       return true;

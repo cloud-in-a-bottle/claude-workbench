@@ -204,9 +204,6 @@ async def start(workspace: Workspace) -> EditorInstance:
         sock.unlink(missing_ok=True)
 
         env = dict(os.environ)
-        # code-server's integrated terminals inherit this, and they want the same renderer the
-        # workbench's own terminals do -- see the note in tabs.create_server_tab.
-        env["CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN"] = "1"
         # code-server's integrated terminals are another place `claude` gets run, so they are
         # billed the way their workspace is.
         apply_env_overlay(env, await workspace_auth_env(workspace.id))
