@@ -71,6 +71,18 @@ export async function uploadPastedImage(blob) {
   return result(resp, 'POST', url);
 }
 
+/** Put a file from the browser in the root of a workspace; resolves to `{ path, name }`, where
+ *  `name` has a number added if a file by that name was already there. Sent as raw bytes. */
+export async function uploadWorkspaceFile(workspaceId, file) {
+  const url = `/api/workspaces/${workspacePath(workspaceId)}/files?filename=${encodeURIComponent(file.name)}`;
+  const resp = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/octet-stream' },
+    body: file,
+  });
+  return result(resp, 'POST', url);
+}
+
 export const getUiSettings = () => request('GET', '/api/ui/settings');
 export const saveUiSettings = (patch) => request('POST', '/api/ui/settings', patch);
 

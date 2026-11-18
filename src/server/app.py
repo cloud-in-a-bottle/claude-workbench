@@ -54,6 +54,7 @@ from server.routes.tabs import list_tabs
 from server.routes.tabs import terminal_ws
 from server.routes.ui import get_ui_settings
 from server.routes.ui import update_ui_settings
+from server.routes.uploads import upload_workspace_file
 from server.signals import survive_hangups
 from server.tabs import persist_tabs_periodically
 from server.tabs import restore_tabs
@@ -117,6 +118,7 @@ app = Litestar(
         open_workspace,
         linear_webhook,
         create_pasted_image,
+        upload_workspace_file,
         list_editors,
         start_editor,
         stop_editor,

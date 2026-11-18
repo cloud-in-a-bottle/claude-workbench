@@ -168,6 +168,10 @@ Being archived is a workspace attribute, like its billing mode, and not a second
 
 Archive and unarchive are each two steps that a crash can land between, so both are ordered to fail towards the same harmless state: the workspace listed as live with nothing open in it, which is indistinguishable from one whose tabs you closed by hand, and which opening it recovers from. That is what lets the startup restore stay ignorant of the archive entirely.
 
+### Uploading files
+
+Right-click a workspace and choose *Upload files…* to put files from your own machine into the root of that workspace. A name that's already taken gets a number added (`notes (1).txt`) rather than overwriting anything, and the sidebar says what each file was saved as. The bytes are written to a hidden temp file and only linked into place once complete, so a dropped upload leaves nothing behind under the real name. Uploads are capped at 2GB each.
+
 ### Billing: API key or Claude subscription
 
 Claude Code can bill either an Anthropic API key or a Claude subscription, and the workbench lets
@@ -213,6 +217,7 @@ POST   /api/workspaces      {project_id, name?, ref?, billing?}
 DELETE /api/workspaces/{project}/{workspace}
 POST   /api/workspaces/{project}/{workspace}/archive     close it down and file it away
 POST   /api/workspaces/{project}/{workspace}/unarchive   reopen its terminals, sessions resumed
+POST   /api/workspaces/{project}/{workspace}/files?filename=   raw body; saved in its root, never overwriting
 GET    /api/workspaces/status                 git status of every live workspace, in one call
 GET    /api/workspaces/agents                 what Claude is doing in each workspace
 GET    /api/settings                          billing default, and what each mode can bill to

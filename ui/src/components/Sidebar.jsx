@@ -1,5 +1,6 @@
 import { For, Show, createSignal } from 'solid-js';
 
+import { uploadWorkspaceFile } from '../api';
 import { isMobile, setDrawerOpen } from '../mobile';
 import {
   archiveWorkspace,
@@ -42,6 +43,9 @@ export function Sidebar() {
   /** Whatever the last archive/unarchive said, when it failed. Those close and reopen real
    *  processes, so a silent failure would leave the rail disagreeing with the container. */
   const [failure, setFailure] = createSignal('');
+  /** Progress of the last upload, or what it saved; cleared on a timer once it's done. */
+  const [notice, setNotice] = createSignal('');
+  let noticeTimer = null;
 
   function toggleSection(key) {
     const next = new Set(collapsed());
@@ -133,6 +137,33 @@ export function Sidebar() {
     fn().catch((err) => setFailure(err.message));
   };
 
+  /** Ask the browser for files and drop each one in the root of `workspace`. */
+  function pickUploads(workspace) {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.multiple = true;
+    input.onchange = () => uploadFiles(workspace, [...input.files]);
+    input.click();
+  }
+
+  async function uploadFiles(workspace, files) {
+    if (!files.length) return;
+    clearTimeout(noticeTimer);
+    setFailure('');
+    const saved = [];
+    try {
+      for (const file of files) {
+        setNotice(`Uploading ${file.name} to ${workspace.name}\u2026`);
+        saved.push((await uploadWorkspaceFile(workspace.id, file)).name);
+      }
+      setNotice(`Uploaded ${saved.join(', ')} to ${workspace.name}`);
+      noticeTimer = setTimeout(() => setNotice(''), 5000);
+    } catch (err) {
+      setNotice('');
+      setFailure(saved.length ? `Uploaded ${saved.join(', ')}; then: ${err.message}` : err.message);
+    }
+  }
+
   /** Pick a workspace. On a phone that also puts the drawer away, since the terminal is what you
    *  picked it to see. */
   function pick(fn) {
@@ -166,6 +197,11 @@ export function Sidebar() {
           },
         ]
       : [
+          {
+            label: 'Upload files…',
+            description: 'Put files from this computer in the workspace root',
+            action: () => pickUploads(workspace),
+          },
           {
             label: 'Archive',
             description: 'Close its terminals, Claude sessions and editor',
@@ -329,6 +365,9 @@ export function Sidebar() {
                 </div>
               )}
             </For>
+          </Show>
+          <Show when={notice()}>
+            <p class="sidebar-notice">{notice()}</p>
           </Show>
           <Show when={failure()}>
             <p class="sidebar-error" onClick={() => setFailure('')} title="Dismiss">
